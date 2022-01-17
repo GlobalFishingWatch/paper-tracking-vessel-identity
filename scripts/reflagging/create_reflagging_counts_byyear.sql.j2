@@ -1,0 +1,83 @@
+CREATE TEMP FUNCTION start_date() AS (TIMESTAMP ("2012-01-01"));
+CREATE TEMP FUNCTION end_date() AS (TIMESTAMP ("{{ END_DATE }}"));
+
+WITH
+  reflagging AS (
+    SELECT *
+    FROM (
+      SELECT *, COUNT (DISTINCT flag_eu) OVER (PARTITION BY vessel_record_id) AS flag_cnt_eu
+      FROM `{{ PROJECT }}.{{ DATASET }}.{{ CATEGORY }}{{ YYYYMMDD }}` )
+    WHERE flag_cnt_eu > 1
+  ),
+
+  years AS (
+    SELECT
+      CAST (year AS STRING) AS year,
+      CAST (year + 1 AS STRING) AS next_year
+    FROM UNNEST (
+      (SELECT GENERATE_ARRAY (
+        EXTRACT (YEAR FROM start_date()),
+        EXTRACT (YEAR FROM end_date()),
+        1)) ) AS year
+  ),
+
+##########################################################################################
+# TODO: Replace the below sub-query with reflagging core table that has the same operation
+##########################################################################################
+  reflagging_count AS (
+    SELECT
+      vessel_record_id, is_fishing, is_carrier, is_bunker,
+      flag AS flag_in,
+      LEAD (flag) OVER (
+        PARTITION BY vessel_record_id
+        ORDER BY first_timestamp, last_timestamp) AS flag_out,
+      flag_eu AS flag_in_eu,
+      LEAD (flag_eu) OVER (
+        PARTITION BY vessel_record_id
+        ORDER BY first_timestamp, last_timestamp) AS flag_out_eu,
+      first_timestamp, last_timestamp,
+      LEAD (first_timestamp) OVER (
+        PARTITION BY vessel_record_id
+        ORDER BY first_timestamp, last_timestamp) AS flag_out_start_timestamp
+    FROM (
+      SELECT vessel_record_id, flag, flag_eu, first_timestamp, last_timestamp, is_fishing, is_carrier, is_bunker
+      FROM reflagging )
+  ),
+
+  reflagging_count_year_mark AS (
+    SELECT a.*, CAST (year AS INT64) AS year
+    FROM reflagging_count AS a
+    JOIN years AS b
+    ON (a.last_timestamp >= CAST (b.year || "-01-01" AS TIMESTAMP)
+      AND a.first_timestamp < CAST (b.next_year || "-01-01" AS TIMESTAMP))
+  ),
+
+  yearly_count AS (
+    SELECT year, flag_in_eu, COUNT(*) AS cnt, LOG (COUNT (*), 10) AS cnt_log
+    FROM (
+      SELECT year, vessel_record_id, is_fishing, is_carrier, is_bunker,
+        flag_in_eu, flag_out_eu,
+        first_timestamp, last_timestamp
+      FROM (
+        SELECT
+          year, vessel_record_id, flag_in_eu, flag_out_eu,
+          first_timestamp, last_timestamp, is_fishing, is_carrier, is_bunker
+        FROM reflagging_count_year_mark
+        WHERE flag_in_eu != flag_out_eu OR flag_out_eu IS NULL ) )
+    GROUP BY 1,2
+    ORDER BY year, cnt DESC
+  ),
+
+  max_count_per_flag AS (
+    SELECT DISTINCT flag_in_eu, MAX (cnt) OVER (PARTITION BY flag_in_eu) AS max_cnt
+    FROM yearly_count
+  )
+
+SELECT *, ROW_NUMBER () OVER (PARTITION BY year ORDER BY cnt DESC) rank_ratio
+FROM yearly_count
+JOIN max_count_per_flag
+USING (flag_in_eu)
+##################################################################################
+# TODO: Move this filter to the code that plot the figure instead of in this query
+##################################################################################
+WHERE max_cnt > 25

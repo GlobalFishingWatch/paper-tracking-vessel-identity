@@ -1,0 +1,164 @@
+-------------------------------------------------------------------------------
+-- Vessel identity dataset
+-- Part1: base identity data from the vessel database
+-- Last modified: 2021-07-19
+-------------------------------------------------------------------------------
+
+#StandardSQL
+WITH
+  ----------------------------------------------------
+  -- Raw identity data from the latest vessel database
+  ----------------------------------------------------
+  raw_data AS (
+    SELECT *
+    FROM `{{ PROJECT }}.{{ VESSEL_DATABASE }}`
+    WHERE matched
+      AND (is_fishing OR is_carrier OR is_bunker)
+  ),
+
+  ----------------------------------------------------------------------------
+  -- Pull the matched fishing and carrier vessels from the latest v.database
+  -- with registry information as an attached string but separated by comma.
+  -- Here we consider only the continuous time ranges that have more than
+  -- 100 messages to get rid of small, segmented time range blocks of vessels.
+  -- TWN registries are for Taiwanese flag vessels operating in IOTC.
+  ----------------------------------------------------------------------------
+  filtered_data AS (
+    SELECT
+      identity.*, shipname_stat,
+      geartype, length_m, tonnage_gt, engine_power_kw,
+      activity, source_code, is_fishing, is_carrier, is_bunker
+    FROM (
+      SELECT
+        * EXCEPT (feature, activity, registry),
+        -------------------------------------------------------------------------
+        -- Unnormalized shipname: count the number of occurrence of all variation
+        -- and select the most frequent unnormalized shipname
+        -- Additionally, clean up the unnoramlized shipname with suffix numbers
+        -------------------------------------------------------------------------
+        ( SELECT AS STRUCT shipname, cnt
+          FROM (
+            SELECT shipname, cnt_space, COUNT (*) AS cnt
+            FROM (
+              SELECT
+                regcode, shipname,
+                ARRAY_LENGTH (REGEXP_EXTRACT_ALL (shipname, r"\s+")) AS cnt_space
+              FROM (
+                SELECT DISTINCT
+                  udfs.extract_regcode (list_uvi) AS regcode,
+                  REGEXP_REPLACE (shipname, r" NO\.\s+", " NO.") AS shipname
+                FROM UNNEST (registry)
+                WHERE shipname IS NOT NULL ) )
+            GROUP BY 1,2 )
+          ORDER BY cnt DESC, cnt_space DESC
+          LIMIT 1 ) AS shipname_stat,
+        IF (
+          --------------------------------------------------------------------------------
+          -- For simplicity, combine all "lighting type vessels" into "squid_jigger" class
+          --------------------------------------------------------------------------------
+          EXISTS (
+            SELECT *
+            FROM UNNEST (registry) AS r
+            WHERE SPLIT (r.list_uvi, "-")[OFFSET(0)] LIKE "NPFC%"
+              AND ( CAST(
+                ( SELECT DISTINCT SPLIT (n, " - ")[SAFE_OFFSET(1)]
+                  FROM UNNEST( SPLIT(r.notes, ", ") ) AS n
+                  WHERE SPLIT (n, " - ")[SAFE_OFFSET(0)] IN ("FALLING NETTER")) AS BOOLEAN)
+                OR CAST(
+                  ( SELECT DISTINCT SPLIT (n, " - ")[SAFE_OFFSET(1)]
+                    FROM UNNEST( SPLIT(r.notes, ", ") ) AS n
+                    WHERE SPLIT (n, " - ")[SAFE_OFFSET(0)] IN ("LIFT NETTER")) AS BOOLEAN) )),
+          ["squid_jigger"],
+          feature.geartype ) AS geartype,
+        feature.length_m,
+        feature.tonnage_gt,
+        feature.engine_power_kw,
+        ARRAY (
+          SELECT AS STRUCT *
+          FROM UNNEST (activity)
+          ---------------------------------------------------------------------------
+          -- Cut-off for the number of messages broadcast to remove noisy time ranges
+          ---------------------------------------------------------------------------
+          WHERE messages > 50) AS activity,
+        ARRAY_TO_STRING (
+          ARRAY (
+            SELECT *
+            FROM (
+              SELECT DISTINCT
+                --------------------------------------------------------------
+                -- Adjust some names to be displayed in the dataset as sources
+                --------------------------------------------------------------
+                CASE
+                  WHEN regcode IN (
+                    "CORR", "RECLASSIFY", "REV",
+                    "CHINAFISHING", "CHINASPRFMO", "BUNKER", "CARRIER" )
+                  THEN "GFW-REVIEW"
+                  WHEN regcode IN (
+                    "DREDGER", "NEPAC", "OWNER", "SYC" )
+                  THEN "RESEARCH-PAPER"
+                  WHEN regcode IN ("FAO")
+                  THEN "IMO"
+                  ELSE regcode
+                END AS regcode
+              FROM (
+                SELECT `world-fishing-827`.udfs.extract_regcode (list_uvi) AS regcode
+                FROM (
+                  SELECT
+                    ------------------------------------------------------------------------
+                    -- TWN registries are published for TWN vessels operating at IOTC region
+                    ------------------------------------------------------------------------
+                    IF (list_uvi LIKE "TWN-%" OR list_uvi LIKE "TWN2-%" OR list_uvi LIKE "TWN3-%",
+                      "IOTC-", list_uvi) AS list_uvi
+                  FROM UNNEST (registry) ) ) )
+            ORDER BY regcode )
+          , ", " ) AS source_code
+      FROM raw_data )
+    WHERE ARRAY_LENGTH (activity) > 0
+  ),
+
+  -------------------------------------------------------
+  -- Sub-query to produce a list of MMSI associated with
+  -- multiple identities. This is just for record purpose
+  -- but is not used in this entire query (for debug only)
+  -------------------------------------------------------
+--   multi_mmsis AS (
+--     SELECT ssvid
+--     FROM filtered_data
+--     GROUP BY 1
+--     HAVING COUNT (*) > 1
+--   ),
+
+  -------------------
+  -- Group identities
+  -------------------
+  preliminary_sample_set AS (
+    SELECT
+      ssvid,
+      first_timestamp, last_timestamp,
+      shipname_stat.shipname,
+      n_shipname,
+      n_callsign,
+      imo,
+      flag,
+      ARRAY_TO_STRING (`world-fishing-827`.udfs.sort_array (geartype, TRUE), "|") AS geartype,
+      ROUND (length_m, 1) AS length_m,
+      ROUND (tonnage_gt, 1) AS tonnage_gt,
+      ROUND (engine_power_kw, 1) AS engine_power_kw,
+      is_fishing,
+      is_carrier,
+      is_bunker,
+      source_code
+    FROM filtered_data
+    LEFT JOIN UNNEST (activity)
+  ),
+
+  ------------------------------------------------------
+  -- Identity data ready to be assigned vessel record ID
+  ------------------------------------------------------
+  identity_data AS (
+    SELECT *
+    FROM preliminary_sample_set
+  )
+
+SELECT *
+FROM identity_data

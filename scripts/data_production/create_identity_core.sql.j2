@@ -1,0 +1,196 @@
+-------------------------------------------------------------------------------
+-- Vessel identity dataset
+-- Putting all identity partial tables (part1 to part4 under the staging bucket) together
+-- and cleaning vessel classes for the final dataset.
+-- Unifying vessel class and dimension across the same vessel hulls
+-- Last modified: 2021-06-08
+-------------------------------------------------------------------------------
+
+#StandardSQL
+WITH
+  ----------------------------
+  -- Prepared identity dataset
+  ----------------------------
+  raw_data AS (
+    SELECT *
+    FROM `{{ PROJECT }}.{{ STAGING }}.identity_core_timestamp_overlap_v{{ YYYYMMDD }}`
+  ),
+
+  ------------------------------------------------------------
+  -- Clean some speicific vessel classes
+  -- drifting_longlines for Tuna RFMO registered vessels
+  -- set_longlines for CCAMLR unless there is conflicting info
+  ------------------------------------------------------------
+  geartype_cleaned AS (
+    SELECT
+      vessel_record_id, ssvid, shipname, n_shipname, n_callsign, imo, flag,
+      first_timestamp, last_timestamp,
+      CASE
+        --------------------------------------------------------------------------------------
+        -- If a vessel is a longliner and operates only at CCAMLR or SPRFMO, but not at tuna RFMOs
+        -- it is highly likely that the vessel is set longliner
+        --------------------------------------------------------------------------------------
+        WHEN geartype = "drifting_longlines|set_longlines"
+          AND (vessel_record_id LIKE "%CCAMLR%"
+            OR source_code LIKE "%SPRFMO%" )
+          AND NOT (
+            vessel_record_id LIKE "%CCSBT%"
+            OR vessel_record_id LIKE "%IATTC%"
+            OR vessel_record_id LIKE "%ICCAT%"
+            OR vessel_record_id LIKE "%IOTC%"
+            OR vessel_record_id LIKE "%WCPFC%"
+            OR vessel_record_id LIKE "%FFA%" )
+        THEN "set_longlines"
+        ---------------------------------------------------------------
+        -- If a vessel is a longliner and operates only at tuna RFMOs,
+        -- but not at CCAMLR nor SPRFMO, nor Spanish/Russian longliners
+        -- it is highly likely a tuna drifting longliner
+        ---------------------------------------------------------------
+        WHEN geartype = "drifting_longlines|set_longlines"
+          AND NOT (vessel_record_id LIKE "%CCAMLR%"
+            OR source_code LIKE "%SPRFMO%"
+            OR source_code LIKE "%ESP%"
+            OR vessel_record_id LIKE "%RUS%" )
+          AND (vessel_record_id LIKE "%CCSBT%"
+            OR vessel_record_id LIKE "%IATTC%"
+            OR vessel_record_id LIKE "%ICCAT%"
+            OR vessel_record_id LIKE "%IOTC%"
+            OR vessel_record_id LIKE "%WCPFC%"
+            OR vessel_record_id LIKE "%FFA%" )
+        THEN "drifting_longlines"
+        ELSE geartype
+      END AS geartype,
+      length_m, tonnage_gt, engine_power_kw, is_fishing, is_carrier, is_bunker,
+      source_code, multi_identity, timestamp_overlap
+    FROM raw_data
+  ),
+
+  multi_id_vessels AS (
+    SELECT *
+    FROM geartype_cleaned
+    WHERE multi_identity
+  ),
+
+  single_id_vessels AS (
+    SELECT *
+    FROM geartype_cleaned
+    WHERE NOT multi_identity
+  ),
+
+  -------------------------------------------
+  -- Get all geartypes by registry per vessel
+  -------------------------------------------
+  geartype_by_vessel AS (
+    SELECT
+      vessel_record_id, row_num, SPLIT (geartype, "|") AS geartype
+    FROM (
+      SELECT DISTINCT
+        vessel_record_id,
+        ROW_NUMBER () OVER (PARTITION BY vessel_record_id) AS row_num,
+        geartype
+      FROM (
+        SELECT DISTINCT
+          vessel_record_id, n_shipname, n_callsign, imo, flag, geartype
+        FROM multi_id_vessels
+        WHERE geartype IS NOT NULL )
+--       WHERE geartype IS NOT NULL
+      )
+  ),
+
+  --------------------------------------------------------------------------
+  -- Map the geartypes to geartype in path forms (to do geartype operations)
+  -- by looking at the "shiptype_dict" table.
+  --------------------------------------------------------------------------
+  geartype_elem_by_vessel AS (
+    SELECT vessel_record_id, row_num, geartype #shiptype_path
+    FROM geartype_by_vessel
+    LEFT JOIN UNNEST (geartype) AS geartype #_flattened
+--     LEFT JOIN `vessel_database_staging.shiptype_dict`
+--     ON (geartype_flattened = shiptype)
+  ),
+
+  ----------------------------------------------------------------------------------
+  -- Count the number of votes for each geartype element
+  -- except general geartype like "fishing" or mid-branch geartype like "fixed_gear"
+  ----------------------------------------------------------------------------------
+  geartype_elem_stat AS (
+    SELECT
+      vessel_record_id, geartype_elem,
+      COUNTIF (geartype_elem NOT IN ('fishing', 'non_fishing', 'fixed_gear', 'seiners') ) AS cnt
+    FROM (
+      SELECT
+        vessel_record_id, #a.geartype, b.geartype,
+        `world-fishing-827`.udfs.determine_class (a.geartype || "|" || b.geartype) AS geartype_elem
+      FROM geartype_elem_by_vessel AS a
+      JOIN geartype_elem_by_vessel AS b
+      USING (vessel_record_id)
+      WHERE a.row_num >= b.row_num
+        AND a.geartype IS NOT NULL
+        AND b.geartype IS NOT NULL )
+    GROUP BY 1,2
+  ),
+
+  ----------------------------------------
+  -- Select the max voted geartype element
+  ----------------------------------------
+  geartype_major_elem AS (
+      SELECT
+        vessel_record_id, STRING_AGG (geartype_elem, "|" ORDER BY geartype_elem) AS geartype_agg,
+      FROM (
+        SELECT vessel_record_id, geartype_elem
+        FROM (
+          SELECT *, MAX (cnt) OVER (PARTITION BY vessel_record_id) AS max_cnt
+          FROM geartype_elem_stat )
+        WHERE cnt = max_cnt )
+      GROUP BY 1
+  ),
+
+  ------------------------------------------------------------------------
+  -- Apply the most representative geartype to all identities across hulls
+  ------------------------------------------------------------------------
+  unify_class_multi_id_vessels AS (
+    SELECT a.* REPLACE (geartype_agg AS geartype)
+    FROM multi_id_vessels AS a
+    LEFT JOIN geartype_major_elem
+    USING (vessel_record_id)
+  ),
+
+  combined AS (
+    SELECT *
+    FROM unify_class_multi_id_vessels
+
+    UNION ALL
+
+    SELECT *
+    FROM single_id_vessels
+  ),
+
+  ---------------------------------------------------------------------
+  -- If there are more than 3 geartypes for one vessel,
+  -- then simply get the most common geartype among all of the elements
+  ---------------------------------------------------------------------
+  cut_under_four_geartype AS (
+    SELECT * EXCEPT (geartype),
+      IF ( ARRAY_LENGTH (SPLIT (geartype, "|")) > 3,
+        `world-fishing-827`.udfs.determine_class (geartype),
+        geartype ) AS geartype
+    FROM combined
+  ),
+
+  ----------------------------------------------------------------------
+  -- Unify dimensions (length, tonnage, and power) across the same hulls
+  ----------------------------------------------------------------------
+  unify_dimension AS (
+    SELECT
+      vessel_record_id, ssvid, shipname, n_shipname, n_callsign,
+      imo, flag, first_timestamp, last_timestamp, geartype,
+      ROUND (AVG (length_m) OVER (PARTITION BY vessel_record_id), 1) AS length_m,
+      ROUND (AVG (tonnage_gt) OVER (PARTITION BY vessel_record_id), 1) AS tonnage_gt,
+      ROUND (AVG (engine_power_kw) OVER (PARTITION BY vessel_record_id), 1) AS engine_power_kw,
+      is_fishing, is_carrier, is_bunker, source_code, multi_identity, timestamp_overlap
+    FROM cut_under_four_geartype
+  )
+
+SELECT *
+FROM unify_dimension
+ORDER BY vessel_record_id, first_timestamp

@@ -1,0 +1,5 @@
+IDENTITY_CORE_TABLE = 'world-fishing-827.vessel_identity.identity_core_v20210801'
+NN_REGISTRY_TABLE = 'world-fishing-827.scratch_joanna.vessel_identity_nn_vs_registry_v20210906'
+ALL_VESSELS_TABLE = 'world-fishing-827.vessel_database_staging.all_vessels_v20210801'
+VESSEL_INFO_TABLE = 'world-fishing-827.gfw_research.vi_ssvid_v20210301'
+# TRAINING_MMSI_TABLE = 'world-fishing-827.scratch_joanna.vc_train_old'

@@ -1,0 +1,268 @@
+country,iso3,P_NP,<12,12-24m,>24,unknown,total
+Albania,ALB,NP,1,,,,1
+Albania,ALB,PW,383,193,45,,621
+Algeria,DZA,PW,3483,1435,106,,5024
+Angola,AGO,NP,5337,,,,5337
+Angola,AGO,PW,3785,114,156,,4055
+Anguilla,AIA,PW,122,,2,,124
+Antigua and Barbuda,ATG,PW,302,36,,,338
+Argentina,ARG,PW,322,246,357,,925
+Aruba,ABW,PW,616,6,,,622
+Australia,AUS,PW,16,209,50,,275
+Azerbaijan,AZE,NP,114,,,,114
+Azerbaijan,AZE,PW,546,,11,,557
+Bahamas,BHS,PW,751,160,23,,934
+Bahrain,BHR,PW,2178,343,,,2521
+Bangladesh,BGD,NP,,,,114000,114000
+Bangladesh,BGD,PW,67669,45,203,,67917
+Barbados,BRB,PW,967,106,,,1073
+Belgium,BEL,PW,1,35,36,,72
+Belize,BLZ,PW,561,,,,561
+Benin,BEN,NP,51771,,,,51771
+Benin,BEN,PW,1363,134,14,,1511
+Bermuda,BMU,PW,143,47,,,190
+Bolivia (Plurinat.State),BOL,NP,2468,,,,2468
+Bolivia (Plurinat.State),BOL,PW,332,,,,332
+Bonaire/S.Eustatius/Saba,BES,NP,5,,,,5
+Bonaire/S.Eustatius/Saba,BES,PW,102,,,,102
+Botswana,BWA,NP,376,,,,376
+Botswana,BWA,PW,213,,,,213
+Brazil,BRA,NP,41229,,,775,42004
+Brazil,BRA,PW,19522,765,,1754,22041
+Brunei Darussalam,BRN,NP,88,,,,88
+Brunei Darussalam,BRN,PW,2143,32,3,,2178
+Bulgaria,BGR,PW,1815,84,11,,1910
+Burkina Faso,BFA,NP,5000,,,,5000
+Burkina Faso,BFA,PW,10,,,,10
+Burundi,BDI,NP,1006,,,,1006
+Burundi,BDI,PW,555,,,,555
+Cambodia,KHM,NP,39726,,,,39726
+Cambodia,KHM,PW,172622,,,,172622
+Cameroon,CMR,NP,4062,,,,4062
+Cameroon,CMR,PW,7185,1431,53,,8669
+Canada,CAN,PW,7954,7275,52,,15281
+Cape Verde,CPV,NP,343,,,,343
+Cape Verde,CPV,PW,911,76,,,987
+Chad,TCD,NP,20000,,,,20000
+Chad,TCD,PW,1700,,,,1700
+Channel Islands,JEY,PW,150,4,,,154
+Chile,CHL,NP,859,39,,,898
+Chile,CHL,PW,12179,2342,204,,14725
+China,CHN,NP,,,,356917,356917
+China,CHN,PW,164769,44335,35608,,244712
+Colombia,COL,PW,3208,119,50,,3377
+Comoros,COL,NP,3322,,,,3322
+Comoros,COM,PW,1684,,,,1684
+"Congo, Dem. Rep. of the",COD,NP,50964,,,,50964
+"Congo, Dem. Rep. of the",COD,PW,15885,,,,15885
+"Congo, Republic of",COG,NP,14347,,,,14347
+"Congo, Republic of",COG,PW,261,54,53,,368
+Cook Islands,COK,NP,3,,,,3
+Cook Islands,COK,PW,259,11,12,,282
+Costa Rica,CRI,NP,6,,,,6
+Costa Rica,CRI,PW,1675,216,15,,1906
+Côte d'Ivoire,CIV,NP,9612,,,,9612
+Côte d'Ivoire,CIV,PW,200,1577,42,,1819
+Croatia,HRV,PW,7023,482,122,,7627
+Cuba,CUB,NP,1404,,,,1404
+Cuba,CUB,PW,470,462,10,,942
+Curacao,CUW,PW,,,5,,5
+Cyprus,CYP,PW,803,31,7,,841
+Denmark,DNK,PW,1898,298,69,,2265
+Djibouti,DJI,NP,20,,,,20
+Djibouti,DJI,PW,180,20,,,200
+Dominica,DMA,NP,17,,,,17
+Dominica,DMA,PW,416,1,,,417
+Dominican Republic,DOM,NP,345,,,,345
+Dominican Republic,DOM,PW,1967,13,,,1980
+Ecuador,ECU,PW,19727,355,178,,20260
+Egypt,EGY,NP,25923,,,,25923
+Egypt,EGY,PW,,,,4919,4919
+El Salvador,SLV,NP,7092,26,,,7118
+El Salvador,SLV,PW,6513,129,4,,6646
+Equatorial Guinea,GNQ,NP,700,,,,700
+Equatorial Guinea,GNQ,PW,400,,,,400
+Eritrea,ERI,PW,127,55,31,,213
+Estonia,EST,PW,1510,22,25,,1557
+Falkland Is.(Malvinas),FLK,PW,,,16,,16
+Faroe Islands,FRO,PW,,50,106,,156
+"Fiji, Republic of",FJI,NP,200,,,,200
+"Fiji, Republic of",FJI,PW,2550,22,36,,2608
+Finland,FIN,PW,3027,45,21,,3093
+France,FRA,PW,3614,661,181,,4456
+French Guiana,GUF,PW,,19,,,19
+French Polynesia,PYF,PW,3924,52,6,,3982
+Gabon,GAB,NP,,,,431,431
+Gabon,GAB,PW,,18,44,1053,1115
+Gambia,GMB,NP,1048,34,,,1082
+Gambia,GMB,PW,458,172,18,,648
+Georgia,GEO,PW,9,13,4,,26
+Germany,DEU,PW,1124,237,53,,1414
+Ghana,GHA,NP,,,,16092,16092
+Ghana,GHA,PW,1276,10513,156,,11945
+Greece,GRC,PW,14304,694,178,,15176
+Greenland,GRL,PW,1679,123,49,,1851
+Grenada,GRD,NP,82,,,,82
+Grenada,GRD,PW,649,73,,,722
+Guadeloupe,GLP,PW,988,,,,988
+Guam,GUM,PW,,141,26,,167
+Guatemala,GTM,NP,,,,2000,2000
+Guatemala,GTM,PW,50,35,2,4500,4587
+Guernsey,GGY,PW,143,2,,,145
+Guinea,GIN,NP,,,,4700,4700
+Guinea,GIN,PW,,,3,1325,1328
+Guinea-Bissau,GNB,NP,1270,,,,1270
+Guinea-Bissau,GNB,PW,750,,1,,751
+Guyana,GUY,NP,134,,,,134
+Guyana,GUY,PW,808,556,,,1364
+Honduras,HND,NP,6811,,,,6811
+Honduras,HND,PW,10682,160,47,,10889
+Iceland,ISL,PW,1301,154,147,,1602
+India,IND,NP,,,,50567,50567
+India,IND,PW,,,,143020,143020
+Indonesia,IDN,NP,,,,165050,165050
+Indonesia,IDN,PW,,,2004,458654,460658
+Iran (Islamic Rep. of),IRN,PW,8760,3470,45,,12275
+Iraq,IRQ,PW,60,213,49,6500,6822
+Ireland,IRL,PW,1830,180,107,,2117
+Israel,ISR,PW,374,36,,,410
+Italy,ITA,PW,8651,3260,349,,12260
+Jamaica,JAM,PW,6929,171,,,7100
+Japan,JPN,NP,,,,4001,4001
+Japan,JPN,PW,,,654,230764,231418
+Jordan,JOR,PW,222,,,,222
+Kazakhstan,KAZ,NP,875,55,,,930
+Kazakhstan,KAZ,PW,997,58,6,,1061
+Kenya,KEN,NP,17014,348,,,17362
+Kenya,KEN,PW,2254,244,8,,2506
+Kiribati,KIR,NP,1218,,,,1218
+Kiribati,KIR,PW,1218,,,,1218
+"Korea, Republic of",KOR,NP,888,14,,,902
+"Korea, Republic of",KOR,PW,57361,7314,1393,,66068
+Kuwait,KWT,PW,534,262,8,,804
+Latvia,LVA,PW,610,14,55,,679
+Lebanon,LBN,NP,81,,,,81
+Lebanon,LBN,PW,1834,47,,,1881
+Liberia,LBR,NP,934,,,,934
+Liberia,LBR,PW,345,28,17,,390
+Libya,LBY,NP,70,,,,70
+Libya,LBY,PW,2819,1488,157,,4464
+Lithuania,LTU,PW,100,5,37,,142
+Madagascar,MDG,NP,28820,,,,28820
+Madagascar,MDG,PW,6,56,165,,227
+Malawi,MWI,NP,14983,,,,14983
+Malawi,MWI,PW,1547,11,,,1558
+Malaysia,MYS,NP,2867,,,,2867
+Malaysia,MYS,PW,44089,5462,1033,,50584
+Maldives,MDV,NP,617,,,,617
+Maldives,MDV,PW,1101,1329,,,2430
+Mali,MLI,NP,50597,,,,50597
+Mali,MLI,PW,2662,,,,2662
+Malta,MLT,PW,855,55,9,,919
+Martinique,MTQ,PW,987,5,,,992
+Mauritania,MRT,PW,,,,3816,3816
+Mauritius,MUS,NP,130,,,,130
+Mauritius,MUS,PW,1556,36,9,,1601
+Mayotte,MYT,PW,145,,5,,150
+Mexico,MEX,PW,74029,1696,271,,75996
+Montserrat,MSR,PW,22,,,,22
+Morocco,MAR,NP,325,,,,325
+Morocco,MAR,PW,17224,1690,293,,19207
+Mozambique,MOZ,NP,45104,,,,45104
+Mozambique,MOZ,PW,1064,239,95,,1398
+Myanmar,MMR,NP,12583,,,,12583
+Myanmar,MMR,PW,14099,1992,770,,16861
+Nauru,NRU,PW,53,,,,53
+Netherlands,NLD,PW,358,246,240,,844
+New Caledonia,NCL,PW,184,13,4,,201
+New Zealand,NZL,NP,5,,,,5
+New Zealand,NZL,PW,741,443,65,,1249
+Nicaragua,NIC,NP,,,,5254,5254
+Nicaragua,NIC,PW,,87,45,4246,4378
+Niger,NER,PW,,,,732,732
+Nigeria,NGA,NP,30522,,,,30522
+Nigeria,NGA,PW,30522,43,108,,30673
+Northern Mariana Is.,MNP,PW,419,42,,,461
+Norway,NOR,PW,4827,813,307,,5947
+Oman,OMN,NP,2184,,,,2184
+Oman,OMN,PW,20676,680,113,,21469
+Pakistan,PAK,NP,491,,,,491
+Pakistan,PAK,PW,16506,7150,,,30397
+Panama,PAN,NP,405,,,,405
+Panama,PAN,PW,,10274,,,10274
+Papua New Guinea,PNG,PW,4,89,497,,590
+Peru,PER,NP,2857,,,,2857
+Peru,PER,PW,2412,1415,345,,4172
+Philippines,PHL,NP,,,,292180,292180
+Philippines,PHL,PW,,,,183998,183998
+Poland,POL,PW,672,120,51,,843
+Portugal,PRT,PW,7214,560,185,,7959
+Puerto Rico,PRI,PW,669,1,,,670
+Qatar,QAT,PW,93,387,,,480
+Réunion,REU,PW,205,21,2,,228
+Romania,ROU,PW,129,15,3,,147
+Russian Federation,RUS,PW,2,364,1168,,1534
+Rwanda,RWA,NP,1218,,,,1218
+Saint Helena,SHN,PW,11,2,,,13
+Saint Kitts and Nevis,KNA,PW,377,4,,,381
+Saint Lucia,LCA,PW,815,7,,,822
+Saint Vincent/Grenadines,VCT,PW,839,,,,839
+Samoa,WSM,PW,63,10,1,,74
+Sao Tome and Principe,STP,NP,1846,,,,1846
+Sao Tome and Principe,STP,PW,528,,,,528
+Saudi Arabia,SAU,PW,10145,1013,37,,11195
+Senegal,SEN,NP,1429,,,,1429
+Senegal,SEN,PW,8054,123,162,,8339
+Serbia and Montenegro,SCG,NP,,,,160,160
+Serbia and Montenegro,SCG,PW,2,10,1,293,306
+Seychelles,SYC,PW,,24,57,,81
+Sierra Leone,SLE,PW,7395,2,136,,7533
+Singapore,SGP,PW,146,9,,,155
+Slovenia,SVN,PW,157,13,,,170
+South Africa,ZAF,PW,,,,1780,1780
+Spain,ESP,PW,6817,1775,720,,9312
+Sri Lanka,LKA,NP,28297,3,,,28300
+Sri Lanka,LKA,PW,28429,2474,,,30903
+Sudan,SDN,NP,2030,,,,2030
+Sudan,SDN,PW,1375,21,2,,1398
+Suriname,SUR,NP,69,,,,69
+Suriname,SUR,PW,926,439,68,,1433
+Sweden,SWE,PW,1114,126,37,,1277
+Syrian Arab Republic,SYR,NP,1419,,,,1419
+Syrian Arab Republic,SYR,PW,1589,67,7,,1663
+Taiwan Province of China,TWN,NP,504,2,,,506
+Taiwan Province of China,TWN,PW,14819,6306,936,,22061
+"Tanzania, United Rep. of",TZA,NP,46007,,,,46007
+"Tanzania, United Rep. of",TZA,PW,11284,,,,11284
+Thailand,THA,NP,,,,2639,2639
+Thailand,THA,PW,31410,35073,736,,67219
+Togo,TGO,NP,160,40,,,200
+Togo,TGO,PW,75,96,,,171
+Tonga,TON,PW,1188,16,4,,1208
+Trinidad and Tobago,TTO,PW,932,57,,,989
+Tunisia,TUN,NP,8360,,,,8360
+Tunisia,TUN,PW,3862,656,266,,4784
+Turkey,TUR,PW,,,,17497,17497
+Turks and Caicos Is.,TCA,PW,228,9,,,237
+Tuvalu,TUV,NP,26,,,,26
+Tuvalu,TUV,PW,189,2,,,191
+Uganda,UGA,NP,36103,395,,,36498
+Uganda,UGA,PW,6592,200,3,,6795
+Ukraine,UKR,NP,12,,,,12
+Ukraine,UKR,PW,3115,130,55,,3300
+United Kingdom,GBR,PW,5297,711,227,,6235
+United States of America,USA,PW,27410,23611,1296,20231,72548
+Uruguay,URY,NP,140,,,,140
+Uruguay,URY,PW,444,22,39,,505
+US Virgin Islands,VIR,PW,274,4,,,278
+Uzbekistan,UZB,NP,825,,,,825
+Uzbekistan,UZB,PW,43,1,,,44
+Vanuatu,VUT,NP,119,,,,119
+Vanuatu,VUT,PW,95,7,59,,161
+"Venezuela, Boliv Rep of",VEN,NP,6177,,,,6177
+"Venezuela, Boliv Rep of",VEN,PW,37092,5805,310,,43207
+Vietnam,VNM,PW,,,,28719,28719
+Yemen,YEM,PW,,,,23582,23582
+Zambia,ZMB,NP,20600,,,,20600
+Zimbabwe,ZWE,NP,583,,,,583
+Zimbabwe,ZWE,PW,539,,,,539

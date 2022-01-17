@@ -1,0 +1,87 @@
+WITH
+  ----------------------------------------------------------------------------------------------
+  -- Get geartype, tonnage, engine power, and length information
+  -- for fishing, carrier and bunker vessels
+  -- (raw registry information, aggregated registry information, and model inferred)
+  -- The vessel characterisation model predictions are retrieved from the vessel identity table.
+  -- The unaggregated and aggregated values are retrieved from registry/vessel database tables.
+  -- aggregated1 is derived from an aggregation across registries
+  -- aggregated2 is derived from an aggregation across Registries and identities
+  -- To make a fair analysis of using the model predictions, remove vessels that were used
+  -- to train the vessel characterisation model
+  ----------------------------------------------------------------------------------------------
+  info_by_vessel AS (
+  SELECT
+    DISTINCT i.ssvid,
+    --------------------------------------------
+    -- vessel characterisation model predictions
+    --------------------------------------------
+    i.inferred.avg_inferred_length AS length_m_inferred,
+    i.inferred.avg_inferred_tonnage AS tonnage_gt_inferred,
+    i.inferred.avg_inferred_engine_power AS engine_power_kw_inferred,
+    i.inferred.inferred_vessel_class AS vessel_class_inferred,
+    registry.scraped,
+    udfs.extract_regcode(registry.list_uvi) AS registries_listed,
+    ---------------------------------------------------------------
+    -- aggregated1 is derived from an aggregation across registries
+    ---------------------------------------------------------------
+    ARRAY_TO_STRING( ARRAY_CONCAT(v.feature.geartype), "|") AS vessel_class_aggregated1,
+    v.feature.length_m AS length_m_aggregated1,
+    v.feature.tonnage_gt AS tonnage_gt_aggregated1,
+    v.feature.engine_power_kw AS engine_power_kw_aggregated1,
+    ---------------------------
+    -- raw registry information
+    ---------------------------
+    registry.length_m AS length_m_registry,
+    registry.tonnage_gt AS tonnage_gt_registry,
+    registry.engine_power_kw AS engine_power_kw_registry,
+    registry.geartype AS vessel_class_registry,
+    udfs.determine_class(registry.geartype) AS agg_vessel_class_registry,
+    ------------------------------------------------------------------------------
+    -- aggregated2 is derived from an aggregation across Registries and identities
+    ------------------------------------------------------------------------------
+    n.geartype AS vessel_class_aggregated2,
+    n.length_m AS length_m_aggregated2,
+    n.tonnage_gt AS tonnage_gt_aggregated2,
+    n.engine_power_kw AS engine_power_kw_aggregated2,
+  FROM
+    `{{vessel_info_table}}` i
+  INNER JOIN
+    `{{all_vessels_table}}` v
+  ON
+    i.ssvid = v.identity.ssvid,
+    UNNEST(registry) AS registry
+  INNER JOIN
+    `{{identity_core_table}}` n
+  ON
+    n.ssvid = v.identity.ssvid
+  WHERE
+    (v.matched = TRUE)
+    AND ( (on_fishing_list_best = TRUE)
+      OR (v.is_carrier = TRUE)
+      OR (v.is_bunker = TRUE))
+    AND multi_identity = FALSE
+    AND (i.activity.overlap_hours <24)
+    ---------------------------------------------------------------------------
+    -- remove vessels that were used to train the vessel characterisation model
+    ---------------------------------------------------------------------------
+    AND (i.ssvid NOT IN 
+      {{training_mmsi}}
+    )
+  ORDER BY
+    i.ssvid )
+-------------------------------------------------------------------
+-- take only most recently scraped and vessels with single identity
+-------------------------------------------------------------------
+SELECT
+  t.* EXCEPT(vessel_class_aggregated1),
+  NULLIF(vessel_class_aggregated1,
+    '') AS vessel_class_aggregated1
+FROM (
+  SELECT
+    t.*,
+    ROW_NUMBER() OVER (PARTITION BY ssvid, registries_listed ORDER BY scraped DESC ) AS seqnum
+  FROM
+    info_by_vessel t ) t
+WHERE
+  seqnum = 1

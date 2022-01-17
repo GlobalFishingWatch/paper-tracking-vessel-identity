@@ -1,0 +1,143 @@
+-------------------------------------------------------------------------------
+-- Vessel identity dataset
+-- Part3: generate vessel_record_id
+-- Last modified: 2021-07-19
+-------------------------------------------------------------------------------
+
+#StandardSQL
+WITH
+  -----------------------------------------------------------
+  -- Base identity data ready to be assigned vessel record ID
+  -----------------------------------------------------------
+  identity_data AS (
+    SELECT
+      ssvid,
+      IFNULL (n_shipname, "NULL") AS n_shipname,
+      IFNULL (n_callsign, "NULL") AS n_callsign,
+      IFNULL (imo, "NULL") AS imo,
+      IFNULL (flag, "NULL") AS flag,
+      * EXCEPT (ssvid, n_shipname, n_callsign, imo, flag)
+    FROM `{{ PROJECT }}.{{ STAGING }}.identity_core_base_v{{ YYYYMMDD }}`
+  ),
+
+  ------------------------------------------
+  -- Cleaned list_uvi with IMO numbers added
+  ------------------------------------------
+  registry_list_imo_add AS (
+    SELECT
+      ssvid,
+      IFNULL (n_shipname, "NULL") AS n_shipname,
+      IFNULL (n_callsign, "NULL") AS n_callsign,
+      IFNULL (imo, "NULL") AS imo,
+      IFNULL (flag, "NULL") AS flag,
+      * EXCEPT (ssvid, n_shipname, n_callsign, imo, flag)
+    FROM `{{ PROJECT }}.{{ STAGING }}.identity_core_list_uvi_v{{ YYYYMMDD }}`
+  ),
+
+  ------------------------------------------------------------------------------------------
+  -- Cross join the table to find pairs of records that share at least one same registry ID
+  -- which indicates that they are the same hull.
+  ------------------------------------------------------------------------------------------
+  join_registry_list AS (
+    SELECT a.ssvid, a.n_shipname, a.n_callsign, a.imo, a.flag, # b.list_uvi,
+      ARRAY (
+        SELECT DISTINCT *
+        FROM UNNEST ( ARRAY_CONCAT (a.list_uvi, b.list_uvi) ) AS arr
+        ORDER BY arr) AS extended_list_uvi
+    FROM registry_list_imo_add AS a
+    CROSS JOIN registry_list_imo_add AS b
+    WHERE NOT (a.ssvid = b.ssvid
+        AND a.n_shipname = b.n_shipname
+        AND a.n_callsign = b.n_callsign
+        AND a.imo = b.imo
+        AND a.flag = b.flag )
+      AND (SELECT COUNT (lu) > 0 FROM UNNEST (a.list_uvi) AS lu WHERE lu IN UNNEST (b.list_uvi))
+  ),
+
+  ----------------------------------------------------------------------------
+  -- Put together registry IDs (connected with "|") that are assigned to hulls
+  ----------------------------------------------------------------------------
+  registry_uvi_multi AS (
+    SELECT
+      ssvid, n_shipname, n_callsign, imo, flag,
+      ARRAY_TO_STRING (
+        ARRAY (
+          SELECT DISTINCT *
+          FROM UNNEST (extended_list_uvi) AS arr
+          ORDER BY arr ), "|") AS vessel_record_id
+    FROM (
+      SELECT
+        ssvid, n_shipname, n_callsign, imo, flag,
+        ARRAY_CONCAT_AGG (extended_list_uvi) AS extended_list_uvi
+      FROM join_registry_list
+      GROUP BY 1,2,3,4,5 )
+  ),
+
+  ----------------------------------------------------------------------------------------
+  -- In case there are only one registry ID assigned, it doesn't pass the cross join above
+  -- so keep them here as entries with a single ID
+  ----------------------------------------------------------------------------------------
+  registry_uvi_single AS (
+    SELECT
+      ssvid, n_shipname, n_callsign, imo, flag,
+      ARRAY_TO_STRING (list_uvi, "|") AS vessel_record_id
+    FROM registry_list_imo_add #registry_list
+    WHERE (ssvid, n_shipname, n_callsign, imo, flag) NOT IN (
+      SELECT AS STRUCT ssvid, n_shipname, n_callsign, imo, flag
+      FROM registry_uvi_multi )
+  ),
+
+  -----------------------------------------------------------------------
+  -- In case there is no valid registry ID assigned,
+  -- generate an ID based on AIS MMSI numbers.
+  -- If AIS is shared by many, create an ID composed of shipname/callsign
+  -- TO DO: Add a better system to detect shared/problematic MMSI numbers
+  -----------------------------------------------------------------------
+  registry_uvi AS (
+    SELECT
+      * EXCEPT (vessel_record_id),
+      -------------------------------------------------------------------------------
+      -- This is to avoid vessels with spoofy MMSIs are bundled together only because
+      -- they use the same spoofy MMSIs. However it could be done better with some
+      -- noisy MMSI lists
+      -------------------------------------------------------------------------------
+      IF (vessel_record_id = "" AND ssvid IN (
+        "0", "1", "100000000", "110000000", "111111111", "123456789", "200000000", "300000000",
+        "400000000", "412000000", "413000000", "500000000", "600000000",
+        "700000000", "800000000", "888888888", "900000000", "999999999" ),
+        n_shipname || "/" || n_callsign,
+        IF (vessel_record_id = "",
+          "AIS-" || ssvid,
+          vessel_record_id ) ) AS vessel_record_id
+    FROM (
+      SELECT *
+      FROM registry_uvi_multi
+      UNION DISTINCT
+      SELECT *
+      FROM registry_uvi_single )
+  ),
+
+  ----------------------------------------------
+  -- Put all together to assign vessel record ID
+  ----------------------------------------------
+  combined AS (
+    SELECT
+      ssvid, shipname, n_shipname, n_callsign, imo, flag,
+      first_timestamp, last_timestamp,
+      geartype, length_m, tonnage_gt, engine_power_kw, vessel_record_id,
+      is_fishing, is_carrier, is_bunker, source_code
+    FROM identity_data
+    LEFT JOIN registry_uvi
+    USING (ssvid, n_shipname, n_callsign, imo, flag)
+  )
+
+SELECT
+  vessel_record_id,
+  ssvid, shipname,
+  IF (n_shipname = "NULL", NULL, n_shipname) AS n_shipname,
+  IF (n_callsign = "NULL", NULL, n_callsign) AS n_callsign,
+  IF (imo = "NULL", NULL, imo) AS imo,
+  IF (flag = "NULL", NULL, flag) AS flag,
+  * EXCEPT (vessel_record_id, ssvid, shipname, n_shipname, n_callsign, imo, flag)
+FROM combined
+ORDER BY vessel_record_id, first_timestamp

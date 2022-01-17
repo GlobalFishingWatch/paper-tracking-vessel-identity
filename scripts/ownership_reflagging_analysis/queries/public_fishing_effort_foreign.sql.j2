@@ -1,0 +1,67 @@
+--------------------------------------------------------------------
+-- This query calculates gridded fishing effort for MMSI associated
+-- with foreign-owned vessels. It removes MMSI that used by multiple
+-- distinct vessels during overlapping activity time ranges because
+-- the activity associated with these MMSI is prone to error.
+--
+-- Last updated: 2021-08-19
+--------------------------------------------------------------------
+
+WITH 
+
+------------------------------------------------------------------------
+
+-- Get the fishing vessels of interest (i.e. foreign owned, 
+-- domestic owned, etc).
+-- Remove MMSI that have identities with overlapping time ranges.
+------------------------------------------------------------------------
+fishing_identities_of_interest AS (
+    SELECT 
+    mmsi,
+    first_timestamp,
+    last_timestamp,
+    FROM `{{ PROJECT }}.{{ OWNERSHIP_BY_MMSI_TABLE }}`
+    WHERE is_fishing
+    AND is_foreign
+    AND NOT overlapping_identities_for_mmsi
+    AND DATE(first_timestamp) <= '2020-12-31'
+    AND first_timestamp IS NOT NULL
+    AND last_timestamp IS NOT NULL
+),
+
+------------------------------------------------------------------------
+-- Get the fishing activity for each mmsi and their time ranges.
+-- The DISTINCT is crucial as it prevent duplication of fishing activity
+-- When multiple identities are attached to one MMSI and have
+-- overlapping time ranges.
+------------------------------------------------------------------------
+fishing_of_interest AS (
+    SELECT DISTINCT
+    b.*
+    FROM fishing_identities_of_interest a
+    LEFT JOIN `{{ PROJECT_PUBLIC }}.{{ PUBLIC_FISHING_EFFORT_TABLE }}` b
+    ON a.mmsi = b.mmsi
+    AND b.date BETWEEN DATE(a.first_timestamp) AND DATE(a.last_timestamp)
+    WHERE b.fishing_hours IS NOT NULL
+),
+
+------------------------------------------------------------------------
+-- Convert to one degree grid cells.
+------------------------------------------------------------------------
+scaled_fishing_effort AS (
+    SELECT
+    * EXCEPT (cell_ll_lat, cell_ll_lon),
+    FLOOR(cell_ll_lat / {{ DEGREE }}) as cell_ll_lat,
+    FLOOR(cell_ll_lon / {{ DEGREE }}) as cell_ll_lon,
+    FROM fishing_of_interest
+)
+
+------------------------------------------------------------------------
+-- Group by one degree grid cells.
+------------------------------------------------------------------------
+SELECT
+cell_ll_lat,
+cell_ll_lon,
+SUM(fishing_hours) AS fishing_hours,
+FROM scaled_fishing_effort
+GROUP BY cell_ll_lat, cell_ll_lon

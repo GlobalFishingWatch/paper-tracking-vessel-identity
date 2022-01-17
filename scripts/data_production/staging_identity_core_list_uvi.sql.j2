@@ -1,0 +1,169 @@
+-------------------------------------------------------------------------------
+-- Vessel identity dataset
+-- Part2: list_uvi cleaned and ready to be turned into vessel_record_id
+-- Last modified: 2021-07-19
+-------------------------------------------------------------------------------
+
+#StandardSQL
+WITH
+  -------------------------------------------
+  -- Raw data from the latest vessel database
+  -------------------------------------------
+  raw_data AS (
+    SELECT identity.*, * EXCEPT (identity)
+    FROM `{{ PROJECT }}.{{ VESSEL_DATABASE }}`
+    WHERE matched
+      AND (is_fishing OR is_carrier OR is_bunker)
+  ),
+
+  -----------------------------------------------------------------------------------------------------
+  -- Pull each registry's "list_uvi" to generate vessel record ID.
+  -- Some of the registries provide their own unique ID assigned to the hulls,
+  -- so a given physical vessel is assigned the same registry ID even though it changes identities.
+  -- Each registry has its own particularities, and not all registries provide registry ID, therefore
+  -- they need somewhat adapted treatment before aggregating identities around unique IDs of registries
+  -----------------------------------------------------------------------------------------------------
+  registry_list AS (
+    SELECT
+      ssvid, n_shipname, n_callsign, imo, flag,
+      ARRAY (
+        SELECT DISTINCT
+          CASE
+            -----------------------------------------------------
+            -- IMO: ID includes "-" so simple SPLIT does not work
+            -----------------------------------------------------
+            WHEN list_uvi LIKE "IMO%"
+            THEN SPLIT (SPLIT (`world-fishing-827`.udfs.extract_regcode(list_uvi) || "-" || SPLIT(list_uvi, "-")[OFFSET(1)], "(")[OFFSET(0)], "/")[OFFSET(0)]
+            ----------------------------------------------------------
+            -- CRC: only include those that are assigned national IDs,
+            --   otherwise, their IDs are simple name/callsign
+            ----------------------------------------------------------
+            WHEN list_uvi LIKE "CRC%"
+            THEN "CRC-" || SPLIT (list_uvi, "NACIONALES/")[SAFE_OFFSET(1)]
+            ---------------------------------------------------------------------------------
+            -- TWN: some ID include characters like "-" or "(", so simple SPLIT does not work
+            ---------------------------------------------------------------------------------
+            WHEN list_uvi LIKE "TWN-%" OR list_uvi LIKE "TWN2-%"
+            THEN REGEXP_REPLACE (
+              SPLIT (`world-fishing-827`.udfs.extract_list_uvi_without_suffix (list_uvi)," (")[OFFSET(0)],
+              r"\s+", "")
+            -----------------------------------------------------------------------------------
+            -- TWN3: TWN3 includes some other flagged vessels, so treat it differently from TWN
+            -----------------------------------------------------------------------------------
+            WHEN list_uvi LIKE "TWN3-%"
+            THEN REGEXP_REPLACE (
+              SPLIT (`world-fishing-827`.udfs.extract_reg_uvi (list_uvi)," (")[OFFSET(0)],
+              r"\s+", "")
+            -----------------------------------------------------------------------------------
+            -- SPRFMO: IMO based list_uvi to be excluded, otherwise it's country registration
+            -----------------------------------------------------------------------------------
+            WHEN list_uvi LIKE "SPRFMO-%"
+            THEN
+              #         REGEXP_REPLACE (
+              #           `world-fishing-827`.udfs.extract_reg_uvi (list_uvi),
+              #           r"\(\d\)", ""),
+              REGEXP_REPLACE (
+                REGEXP_REPLACE (
+                  REGEXP_REPLACE (
+                    REGEXP_REPLACE (
+                      REGEXP_REPLACE (
+                        REGEXP_REPLACE (
+                          REGEXP_REPLACE (
+                            REGEXP_REPLACE (
+                              REGEXP_REPLACE (
+                                REGEXP_REPLACE (
+                                  REGEXP_REPLACE (
+                                    REGEXP_REPLACE (
+                                      REGEXP_REPLACE (
+                                        REGEXP_REPLACE (
+                                          REGEXP_REPLACE (
+                                            REGEXP_REPLACE (
+                                              # REGEXP_REPLACE (
+                                                `world-fishing-827`.udfs.extract_reg_uvi (list_uvi),
+                                                # r"\(\d\)", ""),
+                                              r"(BU)", ""),
+                                            r"HAO", ""),
+                                          r"\s+", ""),
+                                        r"(.+\?)(\d+)(\?.+)", r"\1(\2)\3"),
+                                      r"(.+\?)(JI)(\?.+)", r"\1(\2)\3"),
+                                    r"(.+\?)(HU)(\?.+)", r"\1(\2)\3"),
+                                  r"(.+\?)(LU)(\?.+)", r"\1(\2)\3"),
+                                r"(.+\?)(ZHE)(\?.+)", r"\1(\2)\3"),
+                              r"(.+\()(ZHE)(\?.+)", r"\1(\2)\3"),
+                            r"(.+\?)(LU)(\).+)", r"\1(\2)\3"),
+                          r"\?", r""),
+                        r"\(\(", r"("),
+                      r"\)\)", r")"),
+                    r"‐", "-"),
+                  r"-ESP-ESP", r"-EU-ESP"),
+                r"-LTU-LTU", r"-EU-LTU")
+
+            -----------------------------------------------------------------------------------
+            -- SIOFA: country registration number
+            -----------------------------------------------------------------------------------
+            WHEN list_uvi LIKE "SIOFA-%"
+            THEN REGEXP_REPLACE (
+              REGEXP_REPLACE (
+                `world-fishing-827`.udfs.extract_reg_uvi (list_uvi),
+                r"\s+", " "),
+              "‐", "-")
+            ---------------------------------------------------------------------------------------------
+            -- All others: Simply get the ID without suffix number (e.g. WCPFC2-1069312 -> WCPFC-1069312)
+            ---------------------------------------------------------------------------------------------
+            ELSE
+              REGEXP_REPLACE (
+                TRIM (
+                  SPLIT (`world-fishing-827`.udfs.extract_list_uvi_without_suffix(list_uvi), "(")[OFFSET(0)] ),
+                r"\s+", " ")
+          END list_uvi
+        FROM (
+          SELECT list_uvi
+          FROM UNNEST (registry)
+          --------------------------------------------------------------------------------------------------------------
+          -- These are the registries that provide reasonable registry IDs that we can use to generate vessel record ID
+          --------------------------------------------------------------------------------------------------------------
+          WHERE `world-fishing-827`.udfs.extract_regcode_with_suffix (list_uvi)
+            IN (
+              -- RFMO
+              "CCAMLR", "CCSBT", "IATTC", "IATTC2", "ICCAT",
+              "ICCAT2", "IOTC", "NPFC", "WCPFC", "WCPFC2",
+              "SIOFA", "SPRFMO",
+              -- International
+              "EU", "FFA", "IMO",
+              -- Country
+              "AUS", "CAN", "CHL", "CRC", "FRO",
+              "IDN", "ISL", "ISL3", "NOR2", "PAN",
+              "PER", "RUS", "TWN", "TWN2", "TWN3",
+              "USA", "USA2" )
+            -----------------------------------------------
+            -- NPFC provides its own ID but not before 2018
+            -----------------------------------------------
+            AND ( (`world-fishing-827`.udfs.extract_regcode_with_suffix (list_uvi) = "NPFC" AND scraped >= "2018-01-01")
+              OR (`world-fishing-827`.udfs.extract_regcode_with_suffix (list_uvi) NOT IN ("NPFC") ) )
+            ----------------------------
+            -- Avoid some noisy list_uvi
+            ----------------------------
+            AND list_uvi NOT LIKE "%UNKNOWN%"
+            AND list_uvi NOT IN (
+              "SIOFA-COK-CI", "SIOFA-ESP-3",
+              "SIOFA-ESP-CU", "SIOFA-ESP-CO",
+              "SPRFMO-ESP-GC-1 2-05", "SPRFMO-ESP-GC-12-05" ) ) ) AS list_uvi
+     FROM raw_data
+  ),
+
+  -----------------------------------------------------------------------------------------------------
+  -- Add IMO-based ID (e.g. IMO-9763901) if a vessel is assigned IMO but no ID was previously generated
+  -- This is due to not all IMO numbers are scraped (what is scraped every month is IMO numbers from
+  -- RFMOs and a few major national registries.
+  -----------------------------------------------------------------------------------------------------
+  registry_list_imo_add AS (
+    SELECT
+      * EXCEPT (list_uvi),
+      IF (imo != "NULL" AND NOT EXISTS (SELECT * FROM UNNEST (list_uvi) AS lu WHERE lu LIKE "%IMO%"),
+        ARRAY_CONCAT (list_uvi, ["IMO-" || imo]),
+        list_uvi) AS list_uvi
+    FROM registry_list
+  )
+
+SELECT *
+FROM registry_list_imo_add

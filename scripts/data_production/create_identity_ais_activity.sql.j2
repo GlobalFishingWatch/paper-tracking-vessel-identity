@@ -1,0 +1,85 @@
+-------------------------------------------------------------------------------
+-- Vessel identity dataset - summarizing vessel info
+-- This query summarizes the vessel info for the list of fishing
+-- vessels used to produce the GFW public fishing effort datasets
+-- Last modified: 2021-06-08
+-------------------------------------------------------------------------------
+
+WITH
+
+  ######################################################################
+  # Yearly fishing vessel list with best class and flag
+  ######################################################################
+  fishing_vessels_ssvid AS (
+  SELECT
+  ssvid
+  FROM `{{ PROJECT }}.{{ VESSEL_INFO }}`
+  WHERE on_fishing_list_best
+  ),
+
+  carrier_vessels AS (
+  SELECT
+   identity.ssvid AS ssvid
+  FROM
+    `{{ PROJECT }}.{{ SINGLE_MMSI_MATCHED_VESSELS }}`
+  LEFT JOIN UNNEST(registry)
+  LEFT JOIN UNNEST(activity)
+  LEFT JOIN UNNEST(feature.geartype) as feature_gear
+  WHERE is_carrier AND
+  confidence >= 3
+  AND
+  identity.ssvid NOT IN ('111111111','0','888888888','416202700')
+  GROUP BY 1
+  ),
+
+
+
+  ######################################################################
+  # Inferred and known values from overall vessel info table
+  ######################################################################
+  vessel_info AS (
+  SELECT DISTINCT
+    # Vessel info
+    ssvid,
+    # Flag from AIS MID code and vessel registries
+    ais_identity.flag_mmsi as flag_ais,
+    registry_info.best_known_flag as flag_registry,
+    best.best_flag as flag_gfw,
+    # Vessel class:
+    # Includes top scoring inferred vessel class and best known
+    # vessel class from registries. The registry vessel class is
+    # an array because many vessels are registered as several classes
+    inferred.inferred_vessel_class_ag as vessel_class_inferred,
+    ROUND(inferred.inferred_vessel_class_ag_score, 3) as vessel_class_inferred_score,
+    IF (ARRAY_LENGTH (registry_info.best_known_vessel_class) > 0,
+      ARRAY_TO_STRING(
+        `world-fishing-827`.udfs.sort_array (
+          registry_info.best_known_vessel_class, TRUE)
+        , "|"),
+      NULL ) as vessel_class_registry,
+    best.best_vessel_class as vessel_class_gfw,
+    on_fishing_list_sr as self_reported_fishing_vessel,
+    # Dimensions:
+    # Vessel dimensions from GFW neural net and vessel registries
+    ROUND(inferred.avg_inferred_length, 2) as length_m_inferred,
+    ROUND(registry_info.best_known_length_m, 2) as length_m_registry,
+    ROUND(best.best_length_m, 2) as length_m_gfw,
+    ROUND(inferred.avg_inferred_tonnage, 2) as tonnage_gt_inferred,
+    ROUND(registry_info.best_known_tonnage_gt, 2) as tonnage_gt_registry,
+    ROUND(best.best_tonnage_gt, 2) as tonnage_gt_gfw,
+    ROUND(inferred.avg_inferred_engine_power, 2) as engine_power_kw_inferred,
+    ROUND(registry_info.best_known_engine_power_kw, 2) as engine_power_kw_registry,
+    ROUND(best.best_engine_power_kw, 2) as engine_power_kw_gfw
+  FROM `{{ PROJECT }}.{{ VESSEL_INFO }}`
+  WHERE ssvid IN (SELECT ssvid FROM fishing_vessels_ssvid)
+  OR ssvid IN (SELECT ssvid FROM carrier_vessels)
+  )
+
+############################
+# Return final table
+############################
+SELECT
+  *,
+  IF(ssvid IN (SELECT ssvid FROM fishing_vessels_ssvid), True, False) as is_fishing_gfw,
+  IF(ssvid IN (SELECT ssvid FROM carrier_vessels), True, False) as is_carrier_gfw
+FROM vessel_info

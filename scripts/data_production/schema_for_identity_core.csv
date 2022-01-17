@@ -1,0 +1,20 @@
+group,field,description
+,vessel_record_id,"GFW-generated temporary vessel ID composed of IMO number, RFMO vessel number, and/or national registration number. This ID scheme is still under development therefore it is temporary and may change in the later version of the tables. The same ID is shared among vessel identities that are associated with the same hull over different time ranges. "
+,ssvid,MMSI (Maritime Mobile Service Identity) as source specific vessel ID (SSVID)
+,shipname,The most common original ship name registered to vessel registries 
+,n_shipname,"Normalized ship name matched between AIS and registries. If names from AIS and registries are slightly different but still meet the matching threshold, the name in AIS messages is selected. If there are multiple variations of name in AIS with potentially only minor differences, the one that is the closest to the most common name in registry is chosen."
+,n_callsign,"Normalized international radio call sign. If call signs from AIS and registries are slightly different but still meet the matching threshold, the one from AIS is selected. If a call sign is unavailable from either AIS or registry but the records from both sources match through other identity fields, the call sign from the other source is taken by default"
+,imo,"Identity number given by the International Maritime Organization. If an IMO number is unavailable from either AIS or registry but the records from both sources match through other identity fields, the IMO number from the other source is taken by default"
+,flag,"Flag state (ISO 3166-1 alpha3 code) matched between AIS (MMSI MID code) and registries. If different, the flag from the registry sources is prioritized"
+,first_timestamp,Timestamp when the matched record first appear in AIS (in UTC)
+,last_timestamp,Timestamp when the matched record last appear in AIS (in UTC)
+,geartype,All likely vessel classes listed with pipe symbol
+,length_m,Length of overall (LOA) in meter
+,tonnage_gt,Tonnage (Gross tonnage) in GT
+,engine_power_kw,Total engine power in kW
+,is_fishing,Is the vessel registered as a fishing vessel?
+,is_carrier,Is the vessel registered as a carrier vessel?
+,is_bunker,Is the vessel registered as a bunker vessel?
+,source_code,"Source vessel lists where data are extracted, all attached with comma"
+,multi_identity,Is this vessel hull associated with multiple identities?
+,timestamp_overlap,Do timestamps of the identities associated with the vessel hull overlap?

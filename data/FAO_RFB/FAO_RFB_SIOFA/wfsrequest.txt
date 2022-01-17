@@ -1,0 +1,1 @@
+http://www.fao.org/figis/geoserver/rfb/ows?service=WFS&version=1.0.0&request=GetFeature&typeName=rfb%3ARFB_SIOFA&maxFeatures=50&outputFormat=SHAPE-ZIP

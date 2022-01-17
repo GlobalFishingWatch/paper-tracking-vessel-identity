@@ -1,0 +1,66 @@
+---------------------------------------------------------------------------------
+-- This query template helps produces information about ports of identity changes
+-- with data of how many identity changes take place between domestic and foreign
+-- flags. It uses the identity stitcher data under the staging bucket and is used
+-- for mapping of ports of identity changes.
+-- Last update: 2021-09-18
+---------------------------------------------------------------------------------
+
+CREATE TEMP FUNCTION allowed_distance_gap() AS (30);
+
+SELECT
+  port_label, port_iso3, lat, lon,
+  COUNTIF (foreign_both) AS foreign_both,
+  COUNTIF (foreign_either) AS foreign_either,
+  COUNTIF (national) AS national,
+  COUNT (*) AS total,
+  COUNTIF (foreign_both) / COUNT (*) AS rate_foreign_both,
+  COUNTIF (foreign_either) / COUNT (*) AS rate_foreign_either,
+  COUNTIF (national) / COUNT (*) AS rate_national
+FROM (
+  -------------------------------------------------------------------------------
+  -- Mark whether two vessel identities (identity-in and identity-out) have
+  -- the same domestic flags with regard to the flag of port, both foreign flags,
+  -- or one foreign and one domestic
+  -------------------------------------------------------------------------------
+  SELECT
+    port_iso3, port_label,
+    flag != port_iso3 AND pair_flag != port_iso3 AS foreign_both,
+    (flag = port_iso3 AND pair_flag != port_iso3)
+      OR (flag != port_iso3 AND pair_flag = port_iso3) AS foreign_either,
+    flag = port_iso3 AND pair_flag = port_iso3 AS national
+  FROM (
+    SELECT
+      imo, pair_imo, ssvid, pair_ssvid, flag, pair_flag, port_iso3,
+      IF (port_label = "KAOSIUNG", "KAOHSIUNG", port_label) AS port_label,
+      first_timestamp, last_timestamp, n_shipname, pair_n_shipname, distance_gap_meter, time_gap_minute,
+      `world-fishing-827`.udfs.is_fishing(geartype) AS is_fishing,
+      `world-fishing-827`.udfs.is_carrier(geartype)
+        OR `world-fishing-827`.udfs.is_bunker(geartype) AS is_support,
+      `world-fishing-827`.udfs.is_fishing(pair_geartype) AS pair_is_fishing,
+      `world-fishing-827`.udfs.is_carrier(pair_geartype)
+        OR `world-fishing-827`.udfs.is_bunker(pair_geartype) AS pair_is_support
+    FROM `{{ PROJECT }}.{{ STAGING }}.{{ IDENTITY_STITCHER_CORE }}{{ YYYYMMDD }}`
+    WHERE ((imo = pair_imo)
+        OR (vessel_record_id = pair_vessel_record_id))
+      OR (((imo IS NULL)
+          OR (pair_imo IS NULL))
+        AND (distance_gap_meter <= allowed_distance_gap())
+          AND (rank_dist = 1)))
+  ----------------------------------------------------------------------------------
+  -- Data to be produced in 3 categories: 1) fishing, 2) support, and 3) all vessels
+  ----------------------------------------------------------------------------------
+  WHERE {{ CATEGORY }}
+) AS a
+------------------------------------------
+-- Add port information (position + label)
+------------------------------------------
+LEFT JOIN (
+  SELECT DISTINCT
+    label,
+    AVG (lat) OVER (PARTITION BY label) AS lat,
+    AVG (lon) OVER (PARTITION BY label) AS lon
+  FROM `anchorages.named_anchorages_v20201104` ) AS b
+ON (a.port_label = b.label)
+GROUP BY 1,2,3,4
+ORDER BY total DESC

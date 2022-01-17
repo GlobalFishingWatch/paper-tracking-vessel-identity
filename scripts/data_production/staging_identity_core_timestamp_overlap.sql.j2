@@ -1,0 +1,177 @@
+-------------------------------------------------------------------------------
+-- Vessel identity dataset
+-- Part4: collapse time ranges belonging to the same identities
+-- Last modified: 2021-07-19
+-------------------------------------------------------------------------------
+
+#StandardSQL
+-------------------------------------------------------------------------------
+-- Check if there are overlapping timestamp ranges in the given array
+-- of timestamp ranges (each consisting of first timestamp and last timestamp).
+-- If at least one timestamp range does overlap with another time range
+-- the function returns TRUE. If no time ranges overlaps, it then returns FALSE
+-------------------------------------------------------------------------------
+CREATE TEMP FUNCTION check_timestamp_overlap (
+    arr ARRAY<STRUCT<first_timestamp TIMESTAMP, last_timestamp TIMESTAMP>>) AS ((
+  WITH
+    ------------------------------------
+    -- Flatten the given array of struct
+    ------------------------------------
+    ts AS (
+      SELECT first_timestamp, last_timestamp
+      FROM UNNEST (arr)
+    ),
+
+    --------------------------------------------------------
+    -- Cross join all time ranges except themselves
+    -- to determine there is an overlap of time
+    -- Give a certain length of days to tolerate transitions
+    --------------------------------------------------------
+    compare_ts AS (
+      SELECT
+        -------------------------------------------
+        -- An overlap of up to 7 days is acceptable
+        -------------------------------------------
+        a.first_timestamp < TIMESTAMP_SUB (b.last_timestamp, INTERVAL 7 DAY)
+        AND a.last_timestamp > TIMESTAMP_ADD (b.first_timestamp, INTERVAL 7 DAY) AS overlap
+      FROM ts AS a
+      CROSS JOIN ts AS b
+      -----------------------------
+      -- Avoid comparing themselves
+      -----------------------------
+      WHERE NOT (a.first_timestamp = b.first_timestamp
+        AND a.last_timestamp = b.last_timestamp)
+    )
+
+  -------------------------------------------------------------------
+  -- If only one time range per vessel is given, there is no overlap.
+  -- Otherwise, determine by Logical OR if there is an overlap
+  -------------------------------------------------------------------
+  SELECT
+    IF (COUNT (*) <= 1,
+      FALSE,
+      IF (LOGICAL_OR (overlap) IS NULL,
+        TRUE, LOGICAL_OR (overlap) ) )
+  FROM compare_ts
+));
+
+
+WITH
+  ----------------------------------------------
+  -- Table assigned vessel record ID
+  ----------------------------------------------
+  combined AS (
+    SELECT
+      ssvid,
+      IFNULL (n_shipname, "NULL") AS n_shipname,
+      IFNULL (n_callsign, "NULL") AS n_callsign,
+      IFNULL (imo, "NULL") AS imo,
+      IFNULL (flag, "NULL") AS flag,
+      * EXCEPT (ssvid, n_shipname, n_callsign, imo, flag)
+    FROM `{{ PROJECT }}.{{ STAGING }}.identity_core_vessel_record_id_v{{ YYYYMMDD }}`
+  ),
+
+  --------------------------------------------------------------------------------------
+  -- Now, collapse rows belonging to the same identities with different time ranges
+  -- but respect the order of identities so that we don't lose information when a vessel
+  -- switch back to its old identity.
+  --------------------------------------------------------------------------------------
+  time_collapsed AS (
+    SELECT DISTINCT * EXCEPT (new_first, new_last)
+    FROM (
+      SELECT
+        * EXCEPT (
+          prev_ssvid, prev_shipname, prev_callsign, prev_imo, prev_flag,
+          next_ssvid, next_shipname, next_callsign, next_imo, next_flag,
+          first_timestamp, last_timestamp),
+        -------------------------------------------------------------------------------------------
+        -- If the same identity has multiple consequent rows of time ranges, collapse them
+        -- however identities are different in consequent rows of time ranges, do not collapse them
+        -------------------------------------------------------------------------------------------
+        LAST_VALUE (new_first IGNORE NULLS) OVER (
+          PARTITION BY vessel_record_id
+          ORDER BY first_timestamp
+          ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW ) AS first_timestamp,
+        FIRST_VALUE (new_last IGNORE NULLS) OVER (
+          PARTITION BY vessel_record_id
+          ORDER BY first_timestamp
+          ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING ) AS last_timestamp
+      FROM (
+        SELECT *,
+          IF (ssvid = prev_ssvid AND n_shipname = prev_shipname AND n_callsign = prev_callsign AND imo = prev_imo AND flag = prev_flag,
+            NULL, first_timestamp) AS new_first,
+          IF (ssvid = next_ssvid AND n_shipname = next_shipname AND n_callsign = next_callsign AND imo = next_imo AND flag = next_flag,
+            NULL, last_timestamp) AS new_last,
+        FROM (
+          SELECT *,
+            LAG (ssvid) OVER (PARTITION BY vessel_record_id ORDER BY first_timestamp, last_timestamp) AS prev_ssvid,
+            LAG (n_shipname) OVER (PARTITION BY vessel_record_id ORDER BY first_timestamp, last_timestamp) AS prev_shipname,
+            LAG (n_callsign) OVER (PARTITION BY vessel_record_id ORDER BY first_timestamp, last_timestamp) AS prev_callsign,
+            LAG (imo) OVER (PARTITION BY vessel_record_id ORDER BY first_timestamp, last_timestamp) AS prev_imo,
+            LAG (flag) OVER (PARTITION BY vessel_record_id ORDER BY first_timestamp, last_timestamp) AS prev_flag,
+            LEAD (ssvid) OVER (PARTITION BY vessel_record_id ORDER BY first_timestamp, last_timestamp) AS next_ssvid,
+            LEAD (n_shipname) OVER (PARTITION BY vessel_record_id ORDER BY first_timestamp, last_timestamp) AS next_shipname,
+            LEAD (n_callsign) OVER (PARTITION BY vessel_record_id ORDER BY first_timestamp, last_timestamp) AS next_callsign,
+            LEAD (imo) OVER (PARTITION BY vessel_record_id ORDER BY first_timestamp, last_timestamp) AS next_imo,
+            LEAD (flag) OVER (PARTITION BY vessel_record_id ORDER BY first_timestamp, last_timestamp) AS next_flag
+          FROM combined ) ) )
+  ),
+
+  --------------------------------------------------
+  -- Add multi_identity and timestamp_overlap fields
+  --------------------------------------------------
+  multi_identity_and_overlap AS (
+    SELECT
+      vessel_record_id,
+      COUNT (*) > 1 AS multi_identity,
+      check_timestamp_overlap (
+        ARRAY_AGG (
+          STRUCT (first_timestamp, last_timestamp) ) ) AS timestamp_overlap
+    FROM time_collapsed
+    GROUP BY 1
+  ),
+
+  add_multi_identity_and_overlap_fields AS (
+    SELECT *
+    FROM time_collapsed
+    LEFT JOIN multi_identity_and_overlap
+    USING (vessel_record_id)
+  ),
+
+  ------------------------------------------------------------------------
+  -- Clean some noisy cases of vessel identities switching back and forth
+  -- with timestamp overlaps. In general, they are the ones using the same
+  -- MMSIs simulataneous
+  ------------------------------------------------------------------------
+  collapse_timestamp_overlapped AS (
+    SELECT DISTINCT
+      * EXCEPT (first_timestamp, last_timestamp),
+      MIN (first_timestamp) OVER (
+        PARTITION BY ssvid, n_shipname, n_callsign, imo, flag) AS first_timestamp,
+      MAX (last_timestamp) OVER (
+        PARTITION BY ssvid, n_shipname, n_callsign, imo, flag) AS last_timestamp,
+    FROM add_multi_identity_and_overlap_fields
+    WHERE timestamp_overlap
+
+    UNION DISTINCT
+
+    SELECT DISTINCT
+      * EXCEPT (first_timestamp, last_timestamp),
+      first_timestamp, last_timestamp
+    FROM add_multi_identity_and_overlap_fields
+    WHERE NOT timestamp_overlap
+  )
+
+SELECT
+  vessel_record_id,
+  ssvid, shipname,
+  IF (n_shipname = "NULL", NULL, n_shipname) AS n_shipname,
+  IF (n_callsign = "NULL", NULL, n_callsign) AS n_callsign,
+  IF (imo = "NULL", NULL, imo) AS imo,
+  IF (flag = "NULL", NULL, flag) AS flag,
+  first_timestamp,
+  last_timestamp,
+  * EXCEPT (vessel_record_id, ssvid, shipname, n_shipname, n_callsign, imo, flag,
+            first_timestamp, last_timestamp)
+FROM collapse_timestamp_overlapped
+ORDER BY vessel_record_id, first_timestamp

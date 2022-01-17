@@ -1,0 +1,36 @@
+--------------------------------------------------------------------------
+-- This query template helps create a derivative table of reflagging data
+-- with flag-in (flag which a vessel currently flies)
+-- and flag-out (flag which a vessel will fly once changing its identity)
+-- The result table includes instances when a vessel changes its
+-- identity with a transfer of flag from the previous identity to the next
+-- identity. The result table therefore contains cases like those flags
+-- (flag-in and flag-out) are identical (e.g. Russia to Russia), and these
+-- will be excluded from the analyses of reflagging.
+
+-- Last update: 2021-07-20
+--------------------------------------------------------------------------
+WITH
+  reflagging AS (
+    SELECT *
+    FROM `{{ PROJECT }}.{{ DATASET }}.{{ REFLAGGING_CORE_ALL }}{{ YYYYMMDD }}`
+  )
+
+
+SELECT
+  vessel_record_id, is_fishing, is_carrier, is_bunker,
+  flag AS flag_in,
+  LEAD (flag) OVER (
+    PARTITION BY vessel_record_id
+    ORDER BY first_timestamp, last_timestamp) AS flag_out,
+  flag_eu AS flag_in_eu,
+  LEAD (flag_eu) OVER (
+    PARTITION BY vessel_record_id
+    ORDER BY first_timestamp, last_timestamp) AS flag_out_eu,
+  first_timestamp, last_timestamp, timestamp_overlap
+FROM (
+  SELECT
+    vessel_record_id, ssvids_associated, flag, flag_eu, first_timestamp, last_timestamp,
+    is_fishing, is_carrier, is_bunker, timestamp_overlap
+  FROM reflagging )
+ORDER BY vessel_record_id, first_timestamp

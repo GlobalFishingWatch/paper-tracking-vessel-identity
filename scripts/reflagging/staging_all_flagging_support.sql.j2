@@ -1,0 +1,146 @@
+------------------------------------------------------------------------
+-- This query template helps produce a data table to make
+-- a flagging history map figure for support vessels of the countries with
+-- the most support vessels. The figure will display only the top 15 flags
+-- with their flagging history and AIS activity as dots in the figure.
+-- The result table includes the support vessels that have a single flag
+-- throughout their entire time range between 2012 and the set end date.
+--
+-- Last update: 2021-09-26
+------------------------------------------------------------------------
+CREATE TEMP FUNCTION start_date () AS (TIMESTAMP ("2012-01-01"));
+CREATE TEMP FUNCTION end_date () AS (TIMESTAMP ("{{ END_DATE }}"));
+
+WITH
+  -----------------------------------------
+  -- Pull all vessels from the source table
+  -----------------------------------------
+  raw_data AS (
+    SELECT
+      vessel_record_id, ssvid, n_shipname, n_callsign, imo, flag, is_fishing, is_carrier, is_bunker,
+      first_timestamp, last_timestamp, timestamp_overlap
+    FROM `{{ PROJECT }}.{{ DATASET }}.{{ IDENTITY_CORE_DATA }}{{ YYYYMMDD }}`
+    WHERE is_carrier OR is_bunker
+  ),
+
+  -----------------------------------------------------------
+  -- Get reflagging data, and filter out reflagging within EU
+  -----------------------------------------------------------
+  eu_grouping AS (
+    SELECT
+      *,
+      IF (flag IN (
+          'AUT', 'BEL', 'BGR', 'HRV', 'CYP',
+          'CZE', 'DNK', 'EST', 'FIN', 'FRA',
+          'DEU', 'GRC', 'HUN', 'IRL', 'ITA',
+          'LVA', 'LTU', 'LUX', 'MLT', 'NLD',
+          'POL', 'PRT', 'ROU', 'SVK', 'SVN',
+          'ESP', 'SWE', 'GBR'), #'CYM', 'GIB', 'GRL'
+        "EU", flag) AS flag_eu
+    FROM raw_data
+  ),
+
+  --------------------------------------------------------------------------------
+  -- This process filters out those identity changes that change only MMSI numbers
+  -- while keeping all other identity fields the same, which indicates they are
+  -- the same vessels but shifts only MMSI numbers (e.g. 412001050 -> 412000150)
+  -- We take these cases the same vessels in order not to include false positives
+  --------------------------------------------------------------------------------
+  block_start_end_removing_only_mmsi_changes AS (
+    SELECT DISTINCT
+      vessel_record_id, ssvid, n_shipname, n_callsign, flag, flag_eu,
+      first_timestamp, last_timestamp, is_fishing, is_carrier, is_bunker, timestamp_overlap,
+      ------------------------------------------------------------------------
+      -- If everything is the same except MMSI, then mark the time stamps NULL
+      -- so that it won't be taken into account for reflagging
+      ------------------------------------------------------------------------
+      IF (n_shipname = prev_n_shipname
+          AND n_callsign = prev_n_callsign
+          AND flag = prev_flag,
+        NULL, first_timestamp) AS timeblock_start,
+      IF (n_shipname = next_n_shipname
+          AND n_callsign = next_n_callsign
+          AND flag = next_flag,
+        NULL, last_timestamp) AS timeblock_end
+    FROM (
+      SELECT
+        vessel_record_id, ssvid, n_shipname, n_callsign, flag, flag_eu,
+        first_timestamp, last_timestamp, is_fishing, is_carrier, is_bunker, timestamp_overlap,
+        -----------------------------
+        -- Previous and next identity
+        -----------------------------
+        LAG (ssvid) OVER (PARTITION BY vessel_record_id ORDER BY first_timestamp) AS prev_ssvid,
+        LAG (n_shipname) OVER (PARTITION BY vessel_record_id ORDER BY first_timestamp) AS prev_n_shipname,
+        LAG (n_callsign) OVER (PARTITION BY vessel_record_id ORDER BY first_timestamp) AS prev_n_callsign,
+        LAG (flag) OVER (PARTITION BY vessel_record_id ORDER BY first_timestamp) AS prev_flag,
+        LEAD (ssvid) OVER (PARTITION BY vessel_record_id ORDER BY last_timestamp) AS next_ssvid,
+        LEAD (n_shipname) OVER (PARTITION BY vessel_record_id ORDER BY last_timestamp) AS next_n_shipname,
+        LEAD (n_callsign) OVER (PARTITION BY vessel_record_id ORDER BY last_timestamp) AS next_n_callsign,
+        LEAD (flag) OVER (PARTITION BY vessel_record_id ORDER BY last_timestamp) AS next_flag,
+      FROM eu_grouping )
+  ),
+
+  ------------------------------------------------------------------------------------------------
+  -- Continued from the above block
+  -- Collapse rows so that there will be only rows that have changes other than simply MMSI change
+  ------------------------------------------------------------------------------------------------
+  time_range_blocks_removing_mmsi_changes AS (
+    SELECT
+      vessel_record_id, n_shipname, n_callsign, flag, flag_eu,
+      is_fishing, is_carrier, is_bunker, timestamp_overlap,
+      timeblock_start AS first_timestamp, timeblock_end AS last_timestamp,
+      STRING_AGG (DISTINCT ssvid, "|") AS ssvids_associated
+    FROM (
+      SELECT DISTINCT * EXCEPT (timeblock_start, timeblock_end),
+        MAX (timeblock_start) OVER (
+          PARTITION BY vessel_record_id ORDER BY first_timestamp
+          ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS timeblock_start,
+        MIN (timeblock_end) OVER (
+          PARTITION BY vessel_record_id ORDER BY last_timestamp
+          ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING) AS timeblock_end,
+      FROM block_start_end_removing_only_mmsi_changes )
+    GROUP BY 1,2,3,4,5,6,7,8,9,10,11
+  ),
+
+  ---------------------------------------
+  -- Cut out all AIS messages to end date
+  ---------------------------------------
+  cut_to_end_date AS (
+    SELECT * EXCEPT (last_timestamp),
+      IF (last_timestamp > end_date (), end_date (), last_timestamp) AS last_timestamp
+    FROM time_range_blocks_removing_mmsi_changes
+    WHERE first_timestamp < end_date()
+  ),
+
+  ---------------------------------------------------------------
+  -- Select only those that have changed their flag at least once
+  ---------------------------------------------------------------
+  flagging AS (
+    SELECT
+      *
+    FROM time_range_blocks_removing_mmsi_changes
+    JOIN (
+      SELECT vessel_record_id, COUNT (flag) AS num_events
+      FROM cut_to_end_date
+      GROUP BY vessel_record_id )
+    USING (vessel_record_id)
+  ),
+
+  -----------------------------------------------------------------
+  -- Reflagging instance count and ranking by flag (EU as one flag)
+  -----------------------------------------------------------------
+  top_flags_eu AS (
+    SELECT flag_eu, cnt_eu, RANK () OVER (ORDER BY cnt_eu DESC, flag_eu ASC) AS rank_eu
+    FROM (
+      SELECT flag_eu, COUNT(*) AS cnt_eu
+      FROM flagging
+      GROUP BY 1 ORDER BY cnt_eu DESC )
+  )
+
+SELECT
+  vessel_record_id, n_shipname, n_callsign, ssvids_associated, flag_eu AS flag,
+  first_timestamp, last_timestamp, num_events, cnt_eu AS cnt, rank_eu AS rank
+FROM flagging
+LEFT JOIN top_flags_eu
+USING (flag_eu)
+ORDER BY vessel_record_id, first_timestamp

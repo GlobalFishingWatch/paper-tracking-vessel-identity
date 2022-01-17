@@ -1,0 +1,213 @@
+-------------------------------------------------------------------------------
+-- Vessel identity owner dataset
+-- Vessel ownership data per vessel identity
+-- Last modified: 2021-07-22
+-------------------------------------------------------------------------------
+
+#StandardSQL
+WITH
+  -------------------------------------------
+  -- Raw data from the latest vessel database
+  -------------------------------------------
+  raw_data AS (
+    SELECT *
+    FROM `{{ PROJECT }}.{{ VESSEL_DATABASE }}`
+    WHERE matched
+      AND (is_fishing OR is_carrier OR is_bunker)
+  ),
+
+  ----------------------------------------------------------------------------
+  -- Pull the matched fishing and carrier vessels from the latest v.database
+  -- with registry information as an attached string but separated by comma.
+  -- Here we consider only the continuous time ranges that have more than
+  -- 100 messages to get rid of small, segmented time range blocks of vessels.
+  ----------------------------------------------------------------------------
+  filtered_data AS (
+    SELECT *
+    FROM (
+      SELECT
+        identity.*,
+        (SELECT MIN (first_timestamp) FROM UNNEST (activity) WHERE messages > 100) AS first_timestamp,
+        (SELECT MAX (last_timestamp) FROM UNNEST (activity) WHERE messages > 100) AS last_timestamp,
+        (SELECT SUM (messages) FROM UNNEST (activity) ) AS messages,
+        ARRAY (
+          SELECT
+            AS STRUCT
+              * EXCEPT (max_num_reg, num_reg, source_code),
+              CASE
+                WHEN source_code = "OWNER"
+                THEN "RESEARCH-PAPER"
+                WHEN source_code = "CORR"
+                THEN "GFW-REVIEW"
+                ELSE source_code
+              END source_code
+              # IF (source_code IN ("OWNER"), "RESEARCH-PAPER", source_code) AS source_code
+          FROM (
+            SELECT
+              owner,
+              owner_flag,
+              source_code,
+              num_reg,
+              MAX (num_reg) OVER () AS max_num_reg
+            FROM (
+              SELECT
+                owner, owner_flag,
+                STRING_AGG (DISTINCT source_code, ", ") AS source_code,
+                COUNT (DISTINCT source_code) AS num_reg
+              FROM (
+                SELECT
+                  DISTINCT
+                    udfs.extract_regcode (list_uvi) AS source_code, owner, owner_flag,
+                    confidence,
+                    MAX (confidence) OVER () AS max_conf
+                FROM (
+                  SELECT
+                    list_uvi,
+                    #
+                    # TEMPORARY
+                    CASE
+                      #
+                      # When the owner says RPTD xxx (mostly from IMO GISIS)
+                      # remove the owner information
+                      WHEN owner LIKE "RPTD%"
+                      THEN NULL
+                      #
+                      # Taiwan registries provide several owner information over time at times
+                      # for simplicity, we take only the latest owner information
+                      WHEN (list_uvi LIKE "TWN-%" OR list_uvi LIKE "TWN2-%")
+                        AND scraped != MAX (scraped) OVER (PARTITION BY list_uvi)
+                      THEN NULL
+                      ELSE owner
+                    END AS owner,
+                    #
+                    # TEMPORARY
+                    CASE
+                      #
+                      # When a vessel registered to TWN3 and is not of TWN flagged
+                      # it is possible that the vessel is not owned by Taiwan
+                      # even if it's on Taiwan national registry (confirmed by Hoki)
+                      # It should be reflected in the database, but for now remove it here
+                      WHEN list_uvi LIKE "TWN3-%" AND flag != "TWN"
+                      THEN NULL
+                      ELSE owner_flag
+                    END AS owner_flag,
+                    #
+                    # TEMPORARY
+                    CASE
+                      #
+                      # Temporarily, make Taiwan registry tops even other correction sheets
+                      # but the owner correction sheet still remains the most powerful source.
+                      WHEN list_uvi LIKE "TWN-%" OR list_uvi LIKE "TWN2-%" OR list_uvi LIKE "TWN4-%"
+                      THEN 4.5
+                      WHEN list_uvi LIKE "CORR2-%"
+                      THEN 5
+                      ELSE confidence
+                    END AS confidence,
+                    #
+                    # TEMPORARY
+                    LOGICAL_OR (
+                      IF (list_uvi LIKE "IMO%" AND scraped > "2019-01-01" AND owner_flag IS NOT NULL,
+                        TRUE, FALSE)) OVER () AS imo_post2019,
+                    scraped
+                  FROM UNNEST (registry)
+                  #
+                  # TEMPORARY
+                  WHERE NOT (list_uvi LIKE "IMO-%"
+                    AND owner_address IS NOT NULL
+                    AND owner_address IN ("UNKNOWN.", "CORRESPONDENCE") ) )
+                WHERE owner_flag IS NOT NULL
+                  AND NOT (imo_post2019 AND list_uvi LIKE "IMO%" AND scraped < "2019-01-01" ) )
+              WHERE confidence = max_conf
+              GROUP BY owner, owner_flag ) )
+          WHERE owner_flag IS NOT NULL ## owner IS NOT NULL AND
+            AND num_reg = max_num_reg ) AS owner_info,
+        ARRAY_TO_STRING (
+          ARRAY (
+            SELECT *
+            FROM (
+              SELECT DISTINCT
+                REGEXP_REPLACE (
+                  SPLIT (list_uvi, "-")[OFFSET(0)],
+                  r"\d+", "") AS reg
+              FROM UNNEST (registry) )
+            WHERE reg NOT IN (
+              "CORR", "RECLASSIFY", "REV",
+              "CHINAFISHING", "CHINASPRFMO")), ", " ) AS registry,
+        is_fishing, is_carrier, is_bunker
+      FROM raw_data )
+    WHERE ARRAY_LENGTH (owner_info) > 0
+      AND messages > 0
+  ),
+
+  -------------------------------------------------------
+  -- Sub-query to produce a list of MMSI associated with
+  -- multiple identities. This is just for record purpose
+  -- but is not used in this entire query.
+  -------------------------------------------------------
+  multi_mmsis AS (
+    SELECT ssvid
+    FROM filtered_data
+    GROUP BY 1
+    HAVING COUNT (*) > 1
+  ),
+
+  preliminary_sample_set AS (
+    SELECT
+      ssvid, n_shipname, n_callsign, imo, flag,
+      # first_timestamp, last_timestamp, messages, is_fishing, is_carrier, is_bunker,
+      owner_info
+    FROM filtered_data
+  ),
+
+  -------------------------
+  -- Unnest ownership field
+  -------------------------
+  ownership_data AS (
+    SELECT DISTINCT
+      ssvid,
+      IFNULL (n_shipname, "NULL") AS n_shipname,
+      IFNULL (n_callsign, "NULL") AS n_callsign,
+      IFNULL (imo, "NULL") AS imo,
+      IFNULL (flag, "NULL") AS flag,
+      * EXCEPT (ssvid, n_shipname, n_callsign, imo, flag)
+    FROM (
+      SELECT
+        ssvid, n_shipname, n_callsign, imo, flag,
+        owner.*,
+        # first_timestamp, last_timestamp, messages, is_fishing, is_carrier, is_bunker,
+      FROM preliminary_sample_set
+      LEFT JOIN UNNEST (owner_info) AS owner
+      ORDER BY ssvid )
+  ),
+
+  ----------------------------------------
+  -- Assign Vessel Record ID to identities
+  ----------------------------------------
+  add_vessel_record_id AS (
+    SELECT DISTINCT
+      vessel_record_id,
+      ssvid,
+      IF (n_shipname = "NULL", NULL, n_shipname) AS n_shipname,
+      IF (n_callsign = "NULL", NULL, n_callsign) AS n_callsign,
+      IF (imo = "NULL", NULL, imo) AS imo,
+      IF (flag = "NULL", NULL, flag) AS flag,
+      owner, owner_flag, source_code,
+      # first_timestamp, last_timestamp, messages,
+      # is_fishing, is_carrier, is_bunker
+    FROM ownership_data
+    LEFT JOIN (
+      SELECT DISTINCT
+        ssvid,
+        IFNULL (n_shipname, "NULL") AS n_shipname,
+        IFNULL (n_callsign, "NULL") AS n_callsign,
+        IFNULL (imo, "NULL") AS imo,
+        IFNULL (flag, "NULL") AS flag,
+        vessel_record_id
+      FROM {{ PROJECT }}.{{ DATASET }}.identity_core_v{{ YYYYMMDD }} )
+    USING (ssvid, n_shipname, n_callsign, imo, flag)
+  )
+
+SELECT *
+FROM add_vessel_record_id
+WHERE vessel_record_id IS NOT NULL
+ORDER BY vessel_record_id #, first_timestamp

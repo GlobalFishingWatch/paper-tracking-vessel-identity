@@ -1,0 +1,21 @@
+group,field,description
+,ssvid,MMSI (Maritime Mobile Service Identity) as source specific vessel ID (SSVID)
+,flag_ais,Flag state (ISO 3166-1 alpha3 code) derived from AIS (MMSI MID code)
+,flag_registry,Flag state (ISO 3166-1 alpha3 code) from aggregated registries
+,flag_gfw,Flag state (ISO 3166-1 alpha3 code) determined by GFW to be the most representative by combining all sources of information
+,vessel_class_inferred,Vessel class inferred by GFW's neural network model based on AIS positions
+,vessel_class_inferred_score,"Score of inferred vessel class by GFW's neural network model based on AIS positions (0 being low, 1 being high)"
+,vessel_class_registry,Vessel class aggregated by registries to which the vessel is registered (possible vessel classes are attached with a pipe symbol)
+,vessel_class_gfw,Vessel class determined by GFW to be the most representative by combining all sources of information
+,self_reported_fishing_vessel,Does the vessel self-report to be a fishing vessel?
+,length_m_inferred,Length of overall (LOA) in meter inferred by GFW's neural network model based on AIS positions
+,length_m_registry,Length of overall (LOA) in meter aggregated by registries to which the vessel is registered
+,length_m_gfw,Length of overall (LOA) in meter determined by GFW to be the most representative by combining all sources of information
+,tonnage_gt_inferred,Tonnage (Gross tonnage) in GT inferred by GFW's neural network model based on AIS positions
+,tonnage_gt_registry,Tonnage (Gross tonnage) in GT aggregated by registries to which the vessel is registered
+,tonnage_gt_gfw,Tonnage (Gross tonnage) in GT determined by GFW to be the most representative by combining all sources of information
+,engine_power_kw_inferred,Total engine power in kW inferred by GFW's neural network model based on AIS positions
+,engine_power_kw_registry,Total engine power in kW aggregated by registries to which the vessel is registered
+,engine_power_kw_gfw,Total engine power in kW determined by GFW to be the most representative by combining all sources of information
+,is_fishing_gfw,Is the vessel determined by GFW to be a fishing vessel?
+,is_carrier_gfw,Is the vessel determined by GFW to be a carrier vessel?
