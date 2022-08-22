@@ -1,19 +1,21 @@
-# GitHub Repository for the paper "Tracking Elusive and Shifting Identities of Global Fishing fleet" (in review)
+# GitHub Repository for the paper "Tracking Elusive and Shifting Identities of the Global Fishing fleet" (in review)
 
-This repo is to support the analyses provided in the paper (in review) entitled "Tracking Elusive and Shifting Identities of Global Fishing Fleet."
+This repo is to support the analyses provided in the paper (in review) entitled "Tracking Elusive and Shifting Identities of the Global Fishing Fleet."
 
 ## Setup
 
 ### Running scripts (TO BE UPDATED)
 
 1. Clone this repo by `git clone https://github.com/GlobalFishingWatch/paper-tracking-vessel-identity` 
-2. You have all analysis scripts organized by theme under the `scripts` folder.
+2. You have all analysis scripts organized by theme under the `paper_tracking_vessel_identity` folder.
 3. Follow the instructions in each folder.
 
 ### Environments (TO BE UPDATED)
 
-1. For Python scripts, run `pip install -e .` to install the necessary libraries. This will create a folder titled `<module>.egg-info` that will allow you to access the code within your `<module>` folder from outside of that folder by doing `import <module>` without any need to use paths.
-2. For R scripts, the R version is ... 
+1. For Python scripts
+  * Requirement: python >= 3.8.0 (see packages in detail radenv_videntity.yaml)
+  * run `pip install -e .` to install the necessary packages. This will create a folder titled `<module>.egg-info` that will allow you to access the code within `paper_tracking_vessel_identity` folder from outside of that folder by doing `import <module>` without any need to use paths.
+2. For R scripts, the tested R version is ... 
 
 
 ## Structure and descriptions

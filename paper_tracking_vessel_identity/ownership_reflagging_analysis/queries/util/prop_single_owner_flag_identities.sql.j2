@@ -1,0 +1,132 @@
+WITH 
+
+--------------------------------------------------------------------------------
+-- Get mapping of territory flags to the flag of the sovereign country.
+-- Used to better characterize foreign ownership.
+--------------------------------------------------------------------------------
+territory_flag_mapping AS (
+    SELECT DISTINCT
+    territory1_iso3, sovereign1_iso3
+    FROM `{{PROJECT}}.{{EEZ_INFO_TABLE}}`
+    WHERE eez_type = '200NM'
+    AND territory1_iso3 != sovereign1_iso3
+),
+
+--------------------------------------------------------------------------------
+-- Get all identities from the sample database release with key attributes
+-- such as geartype and time ranges
+--------------------------------------------------------------------------------
+all_identities AS (
+    SELECT 
+    vessel_record_id,
+    ssvid,
+    IFNULL(n_shipname, 'null') as n_shipname,
+    IFNULL(n_callsign, 'null') as n_callsign,
+    IFNULL(flag, 'null') as flag,
+    geartype,
+    first_timestamp,
+    last_timestamp,
+    is_fishing,
+    is_carrier,
+    is_bunker
+    FROM `{{PROJECT}}.{{IDENTITY_TABLE}}{{VERSION}}`
+),
+
+--------------------------------------------------------------------------------
+-- Get all ownership information from the sample database release.
+--------------------------------------------------------------------------------
+all_ownership AS (
+    SELECT 
+    vessel_record_id,
+    ssvid,
+    IFNULL(n_shipname, 'null') as n_shipname,
+    IFNULL(n_callsign, 'null') as n_callsign,
+    IFNULL(flag, 'null') as flag,
+    owner,
+    owner_flag
+    FROM `{{PROJECT}}.{{OWNER_TABLE}}{{VERSION}}`
+),
+
+--------------------------------------------------------------------------------
+-- Join identities with ownership information using vessel_record_id, ssvid, 
+-- n_shipname, n_callsign, and flag.
+-- Remove the few times were the identity has a null flag.
+--------------------------------------------------------------------------------
+identities_with_ownership AS (
+    SELECT
+    vessel_record_id,
+    ssvid,
+    n_shipname,
+    n_callsign,
+    flag,
+    IFNULL((SELECT sovereign1_iso3 FROM territory_flag_mapping WHERE territory1_iso3 = flag), flag) as flag_sovereign,
+    owner,
+    owner_flag,
+    IFNULL((SELECT sovereign1_iso3 FROM territory_flag_mapping WHERE territory1_iso3 = owner_flag), owner_flag) as owner_flag_sovereign,
+    FROM all_identities 
+    LEFT JOIN all_ownership 
+    USING(vessel_record_id, ssvid, n_shipname, n_callsign, flag)
+    WHERE flag != 'null'
+    ORDER BY n_shipname, n_callsign, ssvid, flag, owner, owner_flag
+),
+
+--------------------------------------------------------------------------------
+-- Gather all of the flags for non-null owners for each identity.
+-- This is necessary to properly handle flags coming from null owners so that
+-- only flags not already represented by non-null owners are included in 
+-- `identities_final`.
+--------------------------------------------------------------------------------
+identities_flags_for_nonnull_owners AS (
+    SELECT
+    vessel_record_id, n_shipname, n_callsign, flag,
+    ARRAY_AGG(DISTINCT owner_flag_sovereign) AS flags_for_nonnull_owners
+    FROM identities_with_ownership
+    WHERE owner IS NOT NULL
+    GROUP BY vessel_record_id, n_shipname, n_callsign, flag
+),
+
+--------------------------------------------------------------------------------
+-- Gather all of the SSVIDs used by an identity where identity is defined as 
+-- above but without `ssvid`.
+--------------------------------------------------------------------------------
+ssvid_for_all_owners AS (
+    SELECT
+    vessel_record_id, n_shipname, n_callsign, flag,
+    ARRAY_AGG(DISTINCT ssvid) AS ssvids_used
+    FROM identities_with_ownership
+    GROUP BY vessel_record_id, n_shipname, n_callsign, flag 
+),
+
+--------------------------------------------------------------------------------
+-- For each unique combination of identity and ownership information, classify 
+-- it as foreign, domestic, or unknown. Null owners are included only if their 
+-- flag is not already specified for an identity by a non-null owner to avoid 
+-- duplication from varying quality of registries.
+--------------------------------------------------------------------------------
+identities_with_ownership_classified AS (
+    SELECT DISTINCT
+    vessel_record_id, n_shipname, n_callsign, flag, flag_sovereign,
+    owner, owner_flag, owner_flag_sovereign,
+    IF(owner_flag_sovereign IS NOT NULL AND flag_sovereign NOT IN (owner_flag_sovereign, owner_flag), 1, 0) as is_foreign,
+    IF(owner_flag_sovereign IS NOT NULL AND flag_sovereign IN (owner_flag_sovereign, owner_flag), 1, 0) as is_domestic,
+    IF(owner_flag_sovereign IS NULL, 1, 0) as is_unknown,
+    FROM identities_with_ownership
+    LEFT JOIN identities_flags_for_nonnull_owners USING(vessel_record_id, n_shipname, n_callsign, flag)
+    WHERE (owner IS NOT NULL OR (owner_flag_sovereign IS NULL OR owner_flag_sovereign NOT IN UNNEST(flags_for_nonnull_owners)))
+),
+
+-----------------------------------------------------
+-- Calculate how many distinct flag each identity has,
+-- using the sovereign flag.
+-----------------------------------------------------
+identities_num_owner_flags AS (
+    SELECT vessel_record_id, n_shipname, n_callsign, flag,
+    COUNT(DISTINCT owner_flag_sovereign) as num_owner_flags,
+    FROM identities_with_ownership_classified
+    WHERE owner_flag IS NOT NULL
+    GROUP BY vessel_record_id, n_shipname, n_callsign, flag
+)
+
+SELECT
+COUNTIF(num_owner_flags = 1)/COUNT(*) as prop_single_owner_flag,
+FROM identities_num_owner_flags 

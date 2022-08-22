@@ -1,0 +1,149 @@
+--------------------------------------------------------------------
+-- This query calculates ownership statistics for each flag by
+-- comparing the registered flag with the flag of the owner. If they
+-- are the same, then the vessel is domestically owned. If they are
+-- different, then the vessel is foreign owned. If there is no 
+-- information on the owner or their country of origin, then the
+-- vessel has unknown ownership. Vessels with multiple owners are
+-- consolidated appropirately for a final ruling on ownership before
+-- being rolled up to the flag level.
+--
+-- Territories are considered to be the same as their sovereign flag 
+-- so a vessel registered to the soveriegn but with an owner in the
+-- territory (i.e. FRA to REU) is still considered domestic,
+-- and vice versa.
+--
+-- Last updated: 2021-08-19
+--------------------------------------------------------------------
+
+WITH 
+
+-----------------------------------------------------------------------
+-- Get info needed to remap territories to their soverign ISO3
+-- This is done so that a vessel doesn't get counted as foreign-owned
+-- when flagged to a territory but with an owner sovereign country, or 
+-- vice versa.
+-- This was particularly noticeable around Reunion and a few other 
+-- island territories.
+-----------------------------------------------------------------------
+territory_flag_mapping AS (
+    SELECT DISTINCT
+    territory1_iso3, sovereign1_iso3
+    FROM `{{PROJECT}}.{{EEZ_INFO_TABLE}}`
+    WHERE eez_type = '200NM'
+    AND territory1_iso3 != sovereign1_iso3
+),
+
+-----------------------------------------------------------------------
+-- Get all of the distinct identities.
+-- The DISTINCT is necessary because an identity can be in this
+-- table multiple times if it switches back and forth over time
+-- with another identity. There are only a few hundred of these,
+-- but it would cause results to be duplicated for certain vessels.
+-----------------------------------------------------------------------
+all_identities AS (
+    SELECT DISTINCT
+    vessel_record_id,
+    ssvid,
+    IFNULL(n_shipname, 'null') as n_shipname,
+    IFNULL(n_callsign, 'null') as n_callsign,
+    IFNULL(flag, 'null') as flag,
+    FROM `{{PROJECT}}.{{IDENTITY_TABLE}}{{VERSION}}`
+),
+
+-----------------------------------------------------------------------
+-- Get ownership information, using DISTINCT to return each owner_flag
+-- only once per identity.
+-----------------------------------------------------------------------
+identities_with_ownership AS (
+    SELECT DISTINCT
+    vessel_record_id,
+    ssvid,
+    IFNULL(n_shipname, 'null') as n_shipname,
+    IFNULL(n_callsign, 'null') as n_callsign,
+    IFNULL(flag, 'null') as flag,
+    owner_flag
+    FROM `{{PROJECT}}.{{OWNER_TABLE}}{{VERSION}}`
+),
+
+-----------------------------------------------------------------------
+-- Join the identities to their ownership information.
+-- If an identity does not have any ownership information
+-- it will be given NULL values for owner_flag and owner_flag_sovereign.
+-- These identities are considered as "unknown ownership".
+-----------------------------------------------------------------------
+identities_joined AS (
+    SELECT
+    vessel_record_id,
+    ssvid,
+    n_shipname,
+    n_callsign,
+    flag,
+    owner_flag,
+    IFNULL(sovereign1_iso3, owner_flag) as owner_flag_sovereign,
+    FROM all_identities 
+    LEFT JOIN identities_with_ownership
+    USING(vessel_record_id, ssvid, n_shipname, n_callsign, flag)
+    LEFT JOIN territory_flag_mapping
+    ON owner_flag = territory1_iso3
+    WHERE flag != 'null'
+    ORDER BY n_shipname, n_callsign, ssvid, flag, owner_flag
+),
+
+-----------------------------------------------------------------------
+-- Now classify each identity as foreign, domestic, or unknown for each 
+-- owner_flag.
+-- The DISTINCT collapses them across SSVID so that identities that use
+-- multiple SSVID don't have their ownership counted multiple times.
+-----------------------------------------------------------------------
+identities_final AS (
+    SELECT DISTINCT
+    vessel_record_id, n_shipname, n_callsign, flag,
+    owner_flag, owner_flag_sovereign,
+    owner_flag_sovereign IS NOT NULL AND flag NOT IN (owner_flag_sovereign, owner_flag) as is_foreign,
+    owner_flag_sovereign IS NOT NULL AND flag IN (owner_flag_sovereign, owner_flag) as is_domestic,
+    owner_flag_sovereign IS NULL as is_unknown,
+    FROM identities_joined
+),
+
+-----------------------------------------------------------------------
+-- Now collapse across identities and use instances of ownership type
+-- for final assignment.
+-----------------------------------------------------------------------
+identities_classified AS (
+    SELECT
+    vessel_record_id, n_shipname, n_callsign, flag,
+    LOGICAL_OR(is_foreign) AND NOT LOGICAL_OR(is_domestic) as is_foreign,
+    NOT LOGICAL_OR(is_foreign) AND LOGICAL_OR(is_domestic) as is_domestic,
+    LOGICAL_OR(is_foreign) AND LOGICAL_OR(is_domestic) as is_foreign_and_domestic,
+    NOT LOGICAL_OR(is_foreign) AND NOT LOGICAL_OR(is_domestic) AND LOGICAL_OR(is_unknown) as is_unknown,
+    COUNT(*) AS num_owners
+    FROM identities_final
+    GROUP BY vessel_record_id, n_shipname, n_callsign, flag
+)
+
+------------------------------------------------------------------------------------------
+-- Count the number of identities for each category.
+-- All identities that were is_foreign_and_domestic were manually reviewed
+-- and this narrowed it down to just 14 remaining identities with this classification.
+-- We have chosen to reclassify these as foreign in the analysis as we want to say 
+-- "has this identity ever been foreign-owned?"
+-- For transparency, we've left the foreign_and_domestic counts and created a new category
+-- of foreign_combined to calculate the metrics for the paper.
+------------------------------------------------------------------------------------------
+SELECT
+flag,
+COUNT(*) AS ids_total,
+COUNTIF(is_foreign) as ids_foreign,
+COUNTIF(is_domestic) as ids_domestic,
+COUNTIF(is_foreign_and_domestic) as ids_foreign_and_domestic,
+COUNTIF(is_unknown) as ids_unknown,
+COUNTIF(is_foreign OR is_foreign_and_domestic) as ids_foreign_combined,
+COUNTIF(is_foreign)/COUNT(*) as prop_foreign,
+COUNTIF(is_domestic)/COUNT(*) as prop_domestic,
+COUNTIF(is_foreign_and_domestic)/COUNT(*) as prop_foreign_and_domestic,
+COUNTIF(is_unknown)/COUNT(*) as prop_unknown,
+COUNTIF(is_foreign OR is_foreign_and_domestic)/COUNT(*) as prop_foreign_combined,
+FROM identities_classified
+GROUP BY flag
+ORDER BY ids_total DESC

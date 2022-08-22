@@ -1,0 +1,192 @@
+-----------------------------------------------------------------------
+-- This query template helps produce summary stats of
+-- Chinese distant water fleet on matched registry and on AIS.
+-- It compares matched Chinese DWF vs. matched all Chinese vessels, and
+-- matched Chinese DWF vs. all likely Chinese DWF on AIS.
+
+-- Last update: 2022-07-01 Jaeyoon Park
+-----------------------------------------------------------------------
+
+CREATE TEMP FUNCTION length_min () AS (24);
+CREATE TEMP FUNCTION tonnage_min () AS (100);
+CREATE TEMP FUNCTION min_fishing_hours () AS (24);
+CREATE TEMP FUNCTION start_date () AS (TIMESTAMP "2012-01-01");
+CREATE TEMP FUNCTION end_date () AS (TIMESTAMP "{{ END_DATE }}");
+
+WITH
+  ------------------------------
+  -- Latest vessel identity data
+  ------------------------------
+  matched_chinese_fishing AS (
+    SELECT *
+    FROM `{{ PROJECT }}.{{ DATASET }}.{{ IDENTITY_CORE_DATA }}{{ YYYYMMDD }}`
+    WHERE flag = "CHN"
+      AND is_fishing
+      # AND ( length_m > length_min()
+      #   OR ( length_m IS NULL AND tonnage_gt > tonnage_min () ) )
+  ),
+
+  ------------
+  -- All years
+  ------------
+  years AS (
+    SELECT year, year + 1 AS next_year
+    FROM UNNEST (
+      GENERATE_ARRAY (
+        EXTRACT (YEAR FROM start_date() ),
+        EXTRACT (YEAR FROM end_date() ),
+        1 ) ) AS year
+  ),
+
+  -------------------------------------------------
+  -- List of likely Chinese fishing vessels by year
+  -------------------------------------------------
+  matched_chinese_fishing_byyear AS (
+    SELECT DISTINCT
+      ssvid,
+      n_shipname,
+      n_callsign,
+      flag,
+      geartype,
+      tonnage_gt,
+      year,
+      first_timestamp,
+      last_timestamp
+    FROM (
+      SELECT * EXCEPT (first_timestamp, last_timestamp),
+        IF (first_timestamp < TIMESTAMP (year || "-01-01"), TIMESTAMP (year || "-01-01"), first_timestamp) AS first_timestamp,
+        IF (last_timestamp >= TIMESTAMP (next_year || "-01-01"), TIMESTAMP (next_year || "-01-01"), last_timestamp) AS last_timestamp
+      FROM matched_chinese_fishing AS a
+      JOIN years AS b
+      ON TRUE
+      WHERE last_timestamp >= TIMESTAMP (b.year || "-01-01")
+        AND first_timestamp < TIMESTAMP (b.next_year || "-01-01") )
+    WHERE first_timestamp < last_timestamp
+  ),
+
+  ----------------------------------------------------------
+  -- All likely Chinese vessels in Vessel Info table by year
+  ----------------------------------------------------------
+  ais_chinese_fishing_byyear AS (
+    SELECT
+      year, ssvid, best.best_vessel_class AS geartype, best.best_tonnage_gt,
+      activity.first_timestamp, activity.last_timestamp
+    FROM `{{ PROJECT }}.{{ VESSEL_INFO_BYYEAR_TABLE }}`
+    -------------------------------------------------------------------------
+    -- Active fishing/support vessels in AIS and likely larger than 24 meters
+    -------------------------------------------------------------------------
+    WHERE on_fishing_list_best
+      AND best.best_flag = "CHN"
+      AND activity.frac_spoofing < 0.1
+      AND activity.overlap_hours_multinames < 24 * 7
+      # AND ( best.best_length_m > length_min()
+      #   OR ( best.best_length_m IS NULL AND best.best_tonnage_gt > tonnage_min () ) )
+      AND activity.active_hours > min_fishing_hours()
+  ),
+
+  -------------------
+  -- Fishing segments
+  -------------------
+  fishing_table AS (
+    SELECT
+      ssvid, timestamp, hours, nnet_score, night_loitering, regions.eez
+    FROM `{{ PROJECT }}.{{ FISHING_EFFORT_TABLE }}`
+    WHERE _PARTITIONTIME BETWEEN TIMESTAMP (start_date()) AND TIMESTAMP (end_date())
+      AND seg_id IN (
+        SELECT seg_id
+        FROM `{{ PROJECT }}.{{ FISHING_SEGMENT_TABLE }}`
+        WHERE good_seg
+          AND NOT overlapping_and_short )
+  ),
+
+  -------------------------------------------------------------------------------
+  -- Of all Chinese fishing vessels, select those that fished >24 hours
+  -- outside Chinese EEZ or in the neighboring EEZs or in the joint fishing areas
+  -------------------------------------------------------------------------------
+  matched_fishing_outside_china_byyear AS (
+    SELECT *
+    FROM (
+      SELECT
+        a.year, a.ssvid, n_shipname, tonnage_gt,
+        SUM (
+          IF (
+            ((geartype = "squid_jigger" AND night_loitering > 0.5)
+              OR (geartype != "squid_jigger" AND nnet_score > 0.5))
+            AND (udfs.is_array_empty (eez)
+              OR NOT EXISTS (
+                SELECT *
+                FROM UNNEST (eez) AS e
+                WHERE e IN (
+                      "8486", "49003", #CHN EEZ
+                      "8327", "21796", #KOR EEZ
+                      "8487", "48955", "48950", #JPN EEZ
+                      "8321", "48954", #TWN EEZ
+                      "8484", "8322", "8492", "8328" #VNM, PHL, IDN, PRK
+              ) ) ),
+            hours, 0) ) AS fishing_hours
+      FROM matched_chinese_fishing_byyear AS a
+      JOIN fishing_table AS b
+      ON (a.ssvid = b.ssvid
+        AND b.timestamp BETWEEN a.first_timestamp AND a.last_timestamp )
+      GROUP BY 1,2,3,4 )
+    WHERE fishing_hours > min_fishing_hours()
+  ),
+
+  --------------------------------
+  -- All likely Chinese DWF in AIS
+  --------------------------------
+  ais_fishing_outside_china_byyear AS (
+    SELECT *
+    FROM (
+      SELECT
+        a.year, a.ssvid, a.best_tonnage_gt AS tonnage_gt,
+        SUM (
+          IF (
+            ((geartype = "squid_jigger" AND night_loitering > 0.5)
+              OR (geartype != "squid_jigger" AND nnet_score > 0.5))
+            AND (udfs.is_array_empty (eez)
+              OR NOT EXISTS (
+                SELECT *
+                FROM UNNEST (eez) AS e
+                WHERE e IN (
+                      "8486", "49003", #CHN EEZ
+                      "8327", "21796", #KOR EEZ
+                      "8487", "48955", "48950", #JPN EEZ
+                      "8321", "48954", #TWN EEZ
+                      "8484", "8322", "8492", "8328" #VNM, PHL, IDN, PRK
+              ) ) ),
+            hours, 0) ) AS fishing_hours
+      FROM ais_chinese_fishing_byyear AS a
+      JOIN fishing_table AS b
+      ON (a.ssvid = b.ssvid
+        AND b.timestamp BETWEEN a.first_timestamp AND a.last_timestamp )
+      GROUP BY 1,2,3 )
+    WHERE fishing_hours > min_fishing_hours()
+  )
+
+SELECT
+  year,
+  b.cnt AS total_matched_dwf_vessels, a.cnt AS total_matched_vessels,
+  ROUND (b.cnt / a.cnt, 2) AS frac_matched_dwf_to_matched_total,
+  ROUND (b.total_tonnage, 1) AS matched_dwf_total_tonnage,
+  ROUND (a.total_tonnage, 1) AS matched_total_tonnage,
+  ROUND (b.total_tonnage / a.total_tonnage, 2) AS frac_matched_dwf_tonnage_to_matched_total,
+  c.cnt AS total_ais_dwf_vessels,
+  ROUND (b.cnt / c.cnt, 2) AS frac_matched_dwf_to_total_dwf,
+  ROUND (c.total_tonnage, 1) AS ais_dwf_total_tonnage,
+  ROUND (b.total_tonnage / c.total_tonnage, 2) AS frac_matched_dwf_tonnage_to_dwf_total
+FROM (
+  SELECT year, COUNT (DISTINCT n_shipname) AS cnt, SUM (tonnage_gt) AS total_tonnage
+  FROM matched_chinese_fishing_byyear
+  GROUP BY 1 ) AS a
+JOIN (
+  SELECT year, COUNT (DISTINCT n_shipname) AS cnt, SUM (tonnage_gt) AS total_tonnage
+  FROM matched_fishing_outside_china_byyear
+  GROUP BY 1 ) AS b
+USING (year)
+JOIN (
+  SELECT year, COUNT (DISTINCT ssvid) AS cnt, SUM (tonnage_gt) AS total_tonnage
+  FROM ais_fishing_outside_china_byyear
+  GROUP BY 1 ) AS c
+USING (year)
+ORDER BY year

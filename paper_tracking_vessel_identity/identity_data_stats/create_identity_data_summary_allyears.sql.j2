@@ -1,0 +1,281 @@
+----------------------------------------------------------------------------------
+-- This query produces a table of matched vs. unmatched vessels
+-- between the AIS data set and the collected registries by flag state and by year
+--
+-- Last update: 2022-07-01 Jaeyoon Park
+----------------------------------------------------------------------------------
+CREATE TEMP FUNCTION length_min () AS (24);
+CREATE TEMP FUNCTION tonnage_min () AS (100);
+CREATE TEMP FUNCTION start_date () AS (TIMESTAMP "2012-01-01");
+CREATE TEMP FUNCTION end_date () AS (TIMESTAMP "{{ END_DATE }}");
+
+WITH
+-------------------------
+-- Latest vessel database
+-------------------------
+  db AS (
+    SELECT *
+    FROM `{{ PROJECT }}.{{ VESSEL_DATABASE }}{{ YYYYMMDD }}`
+  ),
+
+----------------------------------------------------------------------
+-- List of likely fishing vessels and fish carriers
+-- that are in one or more registries and that matched to AIS records.
+----------------------------------------------------------------------
+  matched_reg_ais AS (
+    SELECT DISTINCT
+      identity.ssvid,
+      identity.n_shipname,
+      identity.n_callsign,
+      identity.flag
+    FROM db
+    WHERE matched
+      AND (is_fishing OR is_carrier OR is_bunker)
+      ------------------------------------------------------------------------------
+      -- At least an activity that is within the time range set out for the analysis
+      ------------------------------------------------------------------------------
+      AND EXISTS (
+        SELECT *
+        FROM UNNEST (activity) AS a
+        WHERE a.last_timestamp >= CAST (start_date() AS TIMESTAMP)
+          AND a.first_timestamp < CAST (end_date() AS TIMESTAMP) )
+      --------------------------------------------------
+      -- Filter in only those that are likely >24 meters
+      --------------------------------------------------
+      AND ( feature.length_m > length_min()
+        OR ( feature.length_m IS NULL AND feature.tonnage_gt > tonnage_min () ) )
+  ),
+
+-----------------------------------------------------------------------------------------
+-- List of vessels that are in one or more registries as fishing vessels or fish carriers
+-- but that are not matched to AIS
+-----------------------------------------------------------------------------------------
+  unmatched_reg AS (
+    ----------------------------------------------------------------------------------------
+    -- For unmatched registry, consider only normalized shipname as an identity
+    -- because it could include a lot of noise in callsign or flag, which blows up the count
+    ----------------------------------------------------------------------------------------
+    SELECT DISTINCT
+      CAST(NULL AS STRING) AS ssvid,
+      a.n_shipname,
+      CAST(NULL AS STRING) AS n_callsign,
+      CAST(a.flag AS STRING) AS flag
+    FROM (
+      SELECT
+        *,
+        --------------------------------------------------------------------
+        -- Shipname are unnormalized in "registry" column under the database
+        -- so normalize it for better counting later
+        --------------------------------------------------------------------
+        `world-fishing-827`.udfs.normalize_shipname (CAST(shipname AS STRING)) AS n_shipname
+      FROM (
+        SELECT DISTINCT
+          matched, loose_match, r.shipname, r.callsign, r.flag, r.geartype,
+          r.authorized_from, r.authorized_to, r.last_modified, r.length_m, r.tonnage_gt
+        FROM db
+        LEFT JOIN UNNEST (registry) AS r
+        -----------------------------
+        -- Unmatched registry records
+        -----------------------------
+        WHERE NOT matched AND NOT loose_match
+          AND scraped < end_date() ) ) AS a
+    ---------------------------------------------------------------------------------
+    -- Define an identity in unmatched registries by (shipname, callsign) combination
+    -- which shouldn not be in the matched group
+    ---------------------------------------------------------------------------------
+    LEFT JOIN (
+      SELECT n_shipname, flag
+      FROM matched_reg_ais ) AS c
+    ON (IFNULL (a.n_shipname, "NULL") = IFNULL (c.n_shipname, "NULL")
+      # AND IFNULL (a.callsign, "NULL") = IFNULL (c.n_callsign, "NULL") )
+      AND IFNULL (a.flag, "NULL") = IFNULL (c.flag, "NULL") )
+    WHERE ( `world-fishing-827`.udfs.is_fishing (geartype)
+        OR `world-fishing-827`.udfs.is_carrier (geartype)
+        OR `world-fishing-827`.udfs.is_bunker (geartype) )
+      AND c.n_shipname IS NULL ## shipname not in the matched group
+      ------------------------------------------------------------------------------------
+      -- Filter out the records that are too old or outside the time range that we set out
+      ------------------------------------------------------------------------------------
+      AND ( ( authorized_from IS NULL
+          AND authorized_to IS NULL )
+        OR (authorized_to >= CAST (start_date() AS TIMESTAMP)
+          AND authorized_from < CAST (end_date() AS TIMESTAMP) ) )
+      AND ( last_modified >= "2012-01-01" OR last_modified IS NULL )
+      --------------------------------------------------
+      -- Filter in only those that are likely >24 meters
+      --------------------------------------------------
+      AND ( length_m > length_min()
+        OR ( length_m IS NULL AND tonnage_gt > tonnage_min () ) )
+  ),
+
+  ais_raw AS (
+    SELECT *
+    FROM `{{ PROJECT }}.{{ VESSEL_INFO_TABLE }}`
+    WHERE (on_fishing_list_best
+        OR best.best_vessel_class IN (
+          "reefer", "specialized_reefer", "container_reefer",
+          "fish_factory", "well_boat", "fish_tender" ) )
+      AND best.best_length_m > length_min ()
+      AND activity.first_timestamp < end_date()
+  ),
+
+--------------------------------------------------------
+-- List of likely fishing vessels that are active on AIS
+-- but do not match to any registry records.
+--------------------------------------------------------
+  unmatched_ais AS (
+    SELECT DISTINCT
+      ssvid,
+      CAST(NULL AS STRING) AS n_shipname,
+      CAST(NULL AS STRING) AS n_callsign,
+      best.best_flag AS flag
+    FROM ais_raw AS a
+    LEFT JOIN (
+      SELECT ssvid
+      FROM matched_reg_ais ) AS c
+    USING (ssvid)
+    WHERE c.ssvid IS NULL ## ssvid not in the matched group
+        -------------------------------------------------------------------------
+        -- Active fishing/support vessels in AIS and likely larger than 24 meters
+        -- and vessels that are potentially not noisy or spoofing ones.
+        -------------------------------------------------------------------------
+      AND activity.frac_spoofing < 0.1
+      AND activity.overlap_hours_multinames < 24 * 7
+      AND activity.active_hours > 24 * 7
+      ------------------------------------------
+      -- MMSIs that are within the selected time
+      -- ranges and have sufficient messages.
+      ------------------------------------------
+      #AND EXISTS (
+      #  SELECT *
+      #  FROM UNNEST (activity) AS a
+      #  WHERE last_timestamp >= CAST (start_date() AS TIMESTAMP)
+      #    AND first_timestamp < CAST (end_date() AS TIMESTAMP)
+      #    AND messages > 50 )
+  ),
+
+  unmatched_ais_incl_inactive AS (
+    SELECT DISTINCT
+      ssvid,
+      CAST(NULL AS STRING) AS n_shipname,
+      CAST(NULL AS STRING) AS n_callsign,
+      best.best_flag AS flag
+    FROM ais_raw AS a
+    LEFT JOIN (
+      SELECT ssvid
+      FROM matched_reg_ais ) AS c
+    USING (ssvid)
+    WHERE c.ssvid IS NULL
+  ),
+
+-------------------------------------
+-- Combined list of all above vessels
+-------------------------------------
+  combined AS (
+    SELECT DISTINCT
+      ----------------------------------------------------------------------------
+      -- As some vessels have many MMSIs matched to them, define a vessel identity
+      -- by a combination of (shipname, callsign, flag)
+      ----------------------------------------------------------------------------
+      "matched_reg_ais" AS cat,
+      CAST (NULL AS STRING) AS ssvid,
+      n_shipname, n_callsign, flag
+    FROM matched_reg_ais
+    UNION ALL
+    SELECT "unmatched_reg" AS cat, *
+    FROM unmatched_reg
+    UNION ALL
+    SELECT "unmatched_ais" AS cat, *
+    FROM unmatched_ais
+    UNION ALL
+    SELECT "unmatched_ais_unfiltered" AS cat, *
+    FROM unmatched_ais_incl_inactive
+  ),
+
+-----------------------------------------------------------
+-- Top flag states by total number of active vessels on AIS
+-----------------------------------------------------------
+  ranking AS (
+    SELECT flag, RANK () OVER (ORDER BY total_active DESC) AS rank
+    FROM (
+      SELECT
+        flag,
+        COUNTIF(cat IN ("matched_reg_ais", "unmatched_ais")) AS total_active
+      FROM combined
+      GROUP BY 1 )
+  ),
+
+  compare_num_vessels AS (
+    SELECT cnt_matched, cnt_unmatched, cnt_matched / (cnt_matched + cnt_unmatched) AS frac_matched_vessels
+    FROM (
+      SELECT COUNT (*) AS cnt_matched
+      FROM matched_reg_ais),
+      ( SELECT COUNT (*) AS cnt_unmatched
+        FROM unmatched_ais )
+  ),
+
+  compare_num_vessels_chn AS (
+    SELECT cnt_matched, cnt_unmatched, cnt_matched / (cnt_matched + cnt_unmatched) AS frac_matched_vessels
+    FROM (
+      SELECT COUNT (*) AS cnt_matched
+      FROM matched_reg_ais
+      WHERE flag = 'CHN' ),
+      ( SELECT COUNT (*) AS cnt_unmatched
+        FROM unmatched_ais
+        WHERE flag = 'CHN' )
+  ),
+
+  compare_fishing_activity AS (
+    SELECT
+      SUM (IF (matched_vessels, fishing_hours, 0)) AS matched_fishing,
+      SUM (fishing_hours) AS total_fishing,
+      SUM (IF (matched_vessels, fishing_hours, 0)) / SUM (fishing_hours) AS frac_fishing_by_matched_vessels
+    FROM (
+      SELECT DISTINCT ssvid, activity.fishing_hours, matched_vessels
+      FROM ais_raw
+      LEFT JOIN (
+        SELECT DISTINCT ssvid, TRUE AS matched_vessels
+        FROM matched_reg_ais )
+      USING (ssvid)
+      WHERE on_fishing_list_best )
+  ),
+
+  compare_fishing_activity_excl_china AS (
+    SELECT
+      SUM (IF (matched_vessels, fishing_hours, 0)) AS matched_fishing,
+      SUM (fishing_hours) AS total_fishing,
+      SUM (IF (matched_vessels, fishing_hours, 0)) / SUM (fishing_hours) AS frac_fishing_by_matched_vessels
+    FROM (
+      SELECT DISTINCT ssvid, activity.fishing_hours, matched_vessels
+      FROM ais_raw
+      LEFT JOIN (
+        SELECT DISTINCT ssvid, TRUE AS matched_vessels
+        FROM matched_reg_ais
+        WHERE flag != "CHN" )
+      USING (ssvid)
+      WHERE on_fishing_list_best
+        AND best.best_flag != "CHN" )
+  )
+
+---------------------------------------------------------------------------------
+-- Count the number of likely vessels matched / unmatched by flag state
+---------------------------------------------------------------------------------
+SELECT
+  flag,
+  matched_reg_ais, unmatched_reg, unmatched_ais, unmatched_ais_unfiltered,
+  matched_reg_ais / total_active AS rate_matched_reg_ais, total_active
+--   unmatched_ais / total_active AS rate_unmatched_ais
+FROM (
+  SELECT
+    flag,
+    COUNTIF(cat="matched_reg_ais") AS matched_reg_ais,
+    COUNTIF(cat="unmatched_reg") AS unmatched_reg,
+    COUNTIF(cat="unmatched_ais") AS unmatched_ais,
+    COUNTIF(cat="unmatched_ais_unfiltered") AS unmatched_ais_unfiltered,
+    COUNTIF(cat IN ("matched_reg_ais", "unmatched_ais")) AS total_active
+  FROM combined
+  GROUP BY 1 )
+# LEFT JOIN ranking
+# USING (flag)
+WHERE total_active > 0
+ORDER BY total_active DESC, rate_matched_reg_ais DESC

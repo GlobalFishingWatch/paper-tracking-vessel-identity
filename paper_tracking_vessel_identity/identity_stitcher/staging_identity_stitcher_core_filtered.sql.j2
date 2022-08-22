@@ -1,0 +1,61 @@
+CREATE TEMP FUNCTION set_distance_shore() AS (10 * 1000);
+
+WITH
+  stitcher_gap_filter AS (
+    SELECT
+      pair_id, ssvid, pair_ssvid, flag, pair_flag,
+      n_shipname, pair_n_shipname, n_callsign, pair_n_callsign, imo, pair_imo, geartype, pair_geartype,
+      port_iso3,
+      IF (port_label = "KAOSIUNG", "KAOHSIUNG", port_label) AS port_label,
+      first_timestamp, last_timestamp, pair_first_timestamp, pair_last_timestamp,
+      distance_gap_meter, time_gap_minute, num_paired_forward, rank_dist_forward, num_paired_backward, rank_dist_backward,
+      first_distance_shore, last_distance_shore,
+      is_fishing, pair_is_fishing,
+      is_carrier, pair_is_carrier,
+      is_bunker, pair_is_bunker
+    FROM `{{ PROJECT }}.{{ STAGING }}.{{ IDENTITY_STITCHER_CORE }}{{ YYYYMMDD }}`
+    WHERE (imo = pair_imo OR vessel_record_id = pair_vessel_record_id)
+      OR ((imo IS NULL OR pair_imo IS NULL) AND distance_gap_meter <= 30 AND rank_dist_forward = 1 AND rank_dist_backward = 1)
+      OR (num_paired_forward = 1 AND num_paired_backward = 1)
+  ),
+
+  vessel_info AS (
+    SELECT ssvid, on_fishing_list_best, best.best_vessel_class
+    FROM `{{ VESSEL_INFO }}`
+  ),
+
+  geartype_filter AS (
+    SELECT
+      a.*,
+      b.on_fishing_list_best AS is_fishing,
+      c.on_fishing_list_best AS pair_is_fishing,
+      b.best_vessel_class IN (
+        "reefer", "specialized_reefer", "container_reefer",
+        "well_boat", "fish_factory", "fish_tender") is_carrier,
+      c.best_vessel_class IN (
+        "reefer", "specialized_reefer", "container_reefer",
+        "well_boat", "fish_factory", "fish_tender") pair_is_carrier
+    FROM stitcher_gap_filter AS a
+    LEFT JOIN vessel_info AS b
+    ON a.ssvid = b.ssvid
+    LEFT JOIN vessel_info AS c
+    ON a.pair_ssvid = c.ssvid
+  )
+
+SELECT * EXCEPT (num_paired_forward, rank_dist_forward, num_paired_backward, rank_dist_backward, port_label, port_iso3),
+  IF (port_label IS NULL
+      AND first_distance_shore > set_distance_shore()
+      AND last_distance_shore > set_distance_shore(),
+    'Outside ports', port_label) AS port_label,
+  IF (port_iso3 IS NULL
+      AND first_distance_shore > set_distance_shore()
+      AND last_distance_shore > set_distance_shore(),
+    'Outside ports', port_iso3) AS port_iso3
+FROM stitcher_gap_filter
+# FROM geartype_filter
+# WHERE #port_label IS NOT NULL
+  # flag IS NOT NULL
+  # AND pair_flag IS NOT NULL
+  # AND ((is_fishing AND pair_is_fishing)
+    # OR (is_support AND pair_is_support))
+    # OR (is_carrier AND pair_is_carrier))

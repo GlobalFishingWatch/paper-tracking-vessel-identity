@@ -1,0 +1,274 @@
+------------------------------------------------------------------------
+-- create_identity_authorization.sql.j2
+--
+-- This is a jinja2 query template that creates a dataset
+-- for vessel authorization by pulling Global Fishing Watch's
+-- vessel registry database. The information about authorization
+-- for fishing is provided either by regional fisheries management
+-- organizations or national fishing authorities.
+--
+-- This query pulls authorization information for vessels
+-- from various registries recorded at different moments, and
+-- generates aggregated authorization periods for these vessels.
+-- To minimize possible reporting errors from registry, any gap of
+-- less than 3 months between authorization periods for the same vessels
+-- is accepted as potentially authorized.
+--
+-- Last modified: 2022-06-16
+------------------------------------------------------------------------
+
+CREATE TEMP FUNCTION allowed_gap() AS (30 * 3);
+CREATE TEMP FUNCTION min_messages() AS (50);
+
+WITH
+  ------------------------------------
+  -- Pull the raw vessel registry data
+  ------------------------------------
+  raw_data AS (
+    SELECT *
+    FROM `{{ PROJECT }}.{{ VESSEL_DATABASE }}`
+    WHERE matched
+      AND (is_fishing OR is_carrier OR is_bunker)
+  ),
+
+  ----------------------------------------------------------------------------
+  -- Pull the matched fishing and carrier vessels from the latest v.database
+  -- with registry information as an attached string but separated by comma.
+  -- Here we consider only the continuous time ranges that have more than
+  -- 50 messages to get rid of small, segmented time range blocks of vessels.
+  ----------------------------------------------------------------------------
+  filtered_data AS (
+    SELECT *
+    FROM (
+      SELECT
+        identity.*,
+        (SELECT SUM (messages) FROM UNNEST (activity) ) AS messages,
+        ------------------------------------------------------------------
+        -- Filter in only entries in "registry" Array that are relevant to
+        -- authorization information to be included in the final dataset
+        ------------------------------------------------------------------
+        ARRAY (
+          SELECT AS STRUCT *
+          FROM (
+            SELECT DISTINCT
+              -------------------------------------------------------------------
+              -- TWN and TWN2 registries are published by Taiwan Fisheries Agency
+              -- to report the authorization of Taiwan vessels to IOTC.
+              -------------------------------------------------------------------
+              CASE
+                WHEN list_uvi LIKE "TWN-%" OR list_uvi LIKE "TWN2-%"
+                THEN "IOTC"
+                ELSE udfs.extract_regcode (list_uvi)
+              END AS source_code,
+              ---------------------------------------------------------------------------
+              -- Set the minimum authorized_from as the beginning of 2021.
+              -- For GFCM, authorized_from is not explicitly provided so we use
+              -- the date for last modification as a proxy for start of authorization.
+              -- For Peru, the vessels that are present in the registry at the moment
+              -- of scraping are the authorized vessels. As there is no explicit info
+              -- for the start of authorization, we use the date for scrapping as a proxy
+              -- for authoziation start date.
+              ---------------------------------------------------------------------------
+              CASE
+                WHEN authorized_from < "2012-01-01"
+                THEN TIMESTAMP "2012-01-01"
+                WHEN authorized_from IS NULL AND authorized_to IS NOT NULL
+                THEN TIMESTAMP_SUB (authorized_to, INTERVAL 30 DAY)
+                WHEN list_uvi LIKE "GFCM-%"
+                THEN last_modified
+                WHEN list_uvi LIKE "SEAFO-%" AND last_modified IS NOT NULL
+                THEN last_modified
+                WHEN list_uvi LIKE "NAFO-%"
+                THEN TIMESTAMP_SUB (scraped, INTERVAL 30 DAY)
+                WHEN list_uvi LIKE "PER-%"
+                THEN TIMESTAMP_SUB (scraped, INTERVAL 30 DAY)
+                ELSE authorized_from
+              END AS authorized_from,
+              -------------------------------------------------------------------------------------
+              -- In general, periods for authorization granted are about 1 year.
+              -- To minimize the end of authorization that is too far away
+              -- from the scraped date (e.g. >1 years from the moment of scrapping) we replace
+              -- it with scraped date plus 1 month (as our scrapping frequency is monthly).
+              -- The scraped date increases every month therefore this proxy authorized_to date
+              -- increases continuously too.
+              -- Only exceptions here are CCAMLR and SIOFA that do not indicate the end of
+              -- authorization at all, which means that these vessels are currently authorized
+              -- until further notice. In those cases, we also use the scraped date + 1 month
+              -- as a proxy for the authorized_to date.
+              -- For GFCM and Peru, same as for the authorized_from date, there is no explicit date
+              -- but we can use the scraped date + 1 month as a proxy for the authorized_to date.
+              -------------------------------------------------------------------------------------
+              CASE
+                WHEN list_uvi NOT LIKE "CCAMLR%" AND list_uvi NOT LIKE "SIOFA%" AND authorized_to >= scraped
+                # THEN TIMESTAMP_ADD (scraped, INTERVAL 30 DAY)
+                THEN scraped
+                WHEN list_uvi LIKE "CCAMLR%" AND authorized_from IS NOT NULL AND authorized_to IS NULL
+                # THEN TIMESTAMP_ADD (scraped, INTERVAL 30 DAY)
+                THEN scraped
+                WHEN list_uvi LIKE "SIOFA%" AND authorized_from IS NOT NULL AND authorized_to IS NULL
+                # THEN TIMESTAMP_ADD (scraped, INTERVAL 30 DAY)
+                THEN scraped
+                WHEN list_uvi LIKE "GFCM-%"
+                # THEN TIMESTAMP_ADD (scraped, INTERVAL 30 DAY)
+                THEN scraped
+                WHEN list_uvi LIKE "SEAFO-%" AND last_modified IS NOT NULL
+                # THEN TIMESTAMP_ADD (scraped, INTERVAL 30 DAY)
+                THEN scraped
+                WHEN list_uvi LIKE "NAFO-%"
+                # THEN TIMESTAMP_ADD (scraped, INTERVAL 30 DAY)
+                THEN scraped
+                WHEN list_uvi LIKE "PER-%"
+                # THEN TIMESTAMP_ADD (scraped, INTERVAL 30 DAY)
+                THEN scraped
+                ELSE authorized_to
+              END AS authorized_to
+            FROM UNNEST (registry)
+            ORDER BY authorized_from, authorized_to )
+          WHERE (authorized_from IS NOT NULL
+            OR authorized_to IS NOT NULL )
+            AND authorized_to > "2012-01-01"
+            ---------------------------------------------------------------------
+            -- Below are the list of RFMO registries and national registries that
+            -- provide authorization data to be included in the final dataset
+            ---------------------------------------------------------------------
+            AND source_code IN (
+              "CCSBT", "IATTC", "ICCAT", "IOTC", "WCPFC",
+              "CCAMLR", "FFA", "GFCM", "NAFO", "NEAFC",
+              "NPFC", "SEAFO", "SIOFA", "SPRFMO",
+              "FRO", "ISL", "NOR", "PER" ) ) AS auth_info,
+        is_fishing, is_carrier, is_bunker
+      FROM raw_data )
+    -----------------------------------------------------------------------------
+    -- Keep only the vessels that have at least one authorization information row
+    -- and meet the minimum requirement for AIS messages
+    -----------------------------------------------------------------------------
+    WHERE ARRAY_LENGTH (auth_info) > 0
+      AND messages > min_messages()
+  ),
+
+  -----------------------------------------------------------------------
+  -- Link information about authorization date ranges for the same vessel
+  -- to find the previous and next authorization date ranges
+  -----------------------------------------------------------------------
+  auth_range_links AS (
+    SELECT *
+    FROM (
+      SELECT
+        * EXCEPT (auth_info),
+        IFNULL( MAX(authorized_to) OVER (
+          PARTITION BY ssvid, n_shipname, n_callsign, imo, flag, source_code
+          ORDER BY authorized_from, authorized_to
+          ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING),
+          TIMESTAMP("2000-01-01") ) AS prev_max_auth_to,
+        IFNULL( MIN(authorized_from) OVER (
+          PARTITION BY ssvid, n_shipname, n_callsign, imo, flag, source_code
+          ORDER BY authorized_to, authorized_from
+          ROWS BETWEEN 1 FOLLOWING AND UNBOUNDED FOLLOWING),
+          TIMESTAMP("2100-12-31") ) AS next_min_auth_from
+      FROM filtered_data
+      LEFT JOIN UNNEST (auth_info) AS auth_info )
+    ORDER BY ssvid, n_shipname, n_callsign, imo, flag, source_code, authorized_from, authorized_to
+  ),
+
+  --------------------------------------------------------------------------------------------
+  -- Among groups of records that belong to the same vessel for the same registry,
+  -- find authorization time blocks in which records are within the allowed gap
+  -- between the adjacent time blocks, in other words, if there is a gap over the allowed gap,
+  -- mark start and end auth date of each authorization block to break them up.
+  --------------------------------------------------------------------------------------------
+  block_start_end AS (
+    SELECT
+      *,
+      IF(TIMESTAMP_DIFF(authorized_from, prev_max_auth_to, DAY) > allowed_gap(),
+        authorized_from, NULL) AS timeblock_start,
+      IF(TIMESTAMP_DIFF(next_min_auth_from, authorized_to, DAY) > allowed_gap(),
+        authorized_to, NULL) AS timeblock_end
+    FROM auth_range_links
+  ),
+
+  -------------------------------------------------------------------------
+  -- Records have columns indicating the same authorization block together,
+  -- so that one authorization block can be represented by one row.
+  -------------------------------------------------------------------------
+  auth_range_blocks AS (
+    SELECT DISTINCT
+      * EXCEPT(timeblock_start, timeblock_end),
+      IF (timeblock_start = timeblock_end, NULL, timeblock_start) AS authorized_from,
+      IF (timeblock_start = timeblock_end, NULL, timeblock_end) AS authorized_to,
+    FROM (
+      SELECT
+        * EXCEPT (
+          timeblock_start, timeblock_end, authorized_from, authorized_to,
+          prev_max_auth_to, next_min_auth_from),
+        MAX(timeblock_start) OVER (
+          PARTITION BY ssvid, n_shipname, n_callsign, imo, flag, source_code
+			    ORDER BY authorized_from, authorized_to
+          ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS timeblock_start,
+        MIN(timeblock_end) OVER (
+          PARTITION BY ssvid, n_shipname, n_callsign, imo, flag, source_code
+			    ORDER BY authorized_to, authorized_from
+          ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING) AS timeblock_end
+      FROM block_start_end )
+  ),
+
+  -------------------------------
+  -- Rearrange authorization data
+  -------------------------------
+  preliminary_sample_set AS (
+    SELECT
+      ssvid, n_shipname, n_callsign, imo, flag, source_code, authorized_from, authorized_to
+    FROM auth_range_blocks
+  ),
+
+  -----------------------------------
+  -- Prepare to join Vessel Record ID
+  -----------------------------------
+  authorization_data AS (
+    SELECT
+      ssvid,
+      IFNULL (n_shipname, "NULL") AS n_shipname,
+      IFNULL (n_callsign, "NULL") AS n_callsign,
+      IFNULL (imo, "NULL") AS imo,
+      IFNULL (flag, "NULL") AS flag,
+      * EXCEPT (ssvid, n_shipname, n_callsign, imo, flag),
+      TIMESTAMP (
+        SUBSTR (CAST ({{ YYYYMMDD }} AS STRING), 1, 4) || "-" ||
+        SUBSTR (CAST ({{ YYYYMMDD }} AS STRING), 5, 2) || "-" ||
+        SUBSTR (CAST ({{ YYYYMMDD }} AS STRING), 7, 2) ) AS yyyymmdd
+    FROM preliminary_sample_set
+  ),
+
+  ----------------------------------------
+  -- Assign Vessel Record ID to identities
+  ----------------------------------------
+  add_vessel_record_id AS (
+    SELECT
+      vessel_record_id,
+      ssvid,
+      IF (n_shipname = "NULL", NULL, n_shipname) AS n_shipname,
+      IF (n_callsign = "NULL", NULL, n_callsign) AS n_callsign,
+      IF (imo = "NULL", NULL, imo) AS imo,
+      IF (flag = "NULL", NULL, flag) AS flag,
+      authorized_from,
+      IF (authorized_to > yyyymmdd, yyyymmdd, authorized_to) AS authorized_to,
+      source_code,
+    FROM authorization_data
+    LEFT JOIN (
+      SELECT DISTINCT
+        ssvid,
+        IFNULL (n_shipname, "NULL") AS n_shipname,
+        IFNULL (n_callsign, "NULL") AS n_callsign,
+        IFNULL (imo, "NULL") AS imo,
+        IFNULL (flag, "NULL") AS flag,
+        vessel_record_id
+      FROM {{ DATASET }}.identity_core_v{{ YYYYMMDD }} )
+    USING (ssvid, n_shipname, n_callsign, imo, flag)
+  )
+
+-----------------------------------------------------------
+-- Final dataset for the authorization periods per registry
+-----------------------------------------------------------
+SELECT *
+FROM add_vessel_record_id
+WHERE vessel_record_id IS NOT NULL
+ORDER BY vessel_record_id, ssvid, source_code, authorized_from, authorized_to

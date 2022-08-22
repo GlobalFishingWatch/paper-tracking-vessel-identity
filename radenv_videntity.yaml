@@ -1,0 +1,47 @@
+name: rad-videntity
+
+dependencies:
+  - python=3.9.7
+  - pip=21.0.1
+  - conda-forge::black
+  - conda-forge::cartopy=0.18.0
+  - conda-forge::cmocean
+  - conda-forge::flake8
+  - conda-forge::gcsfs
+  - conda-forge::gdal=3.1.4
+  - conda-forge::gh
+  - conda-forge::glymur
+  - conda-forge::google-api-python-client
+  - conda-forge::google-auth
+  - conda-forge::google-cloud-bigquery
+  - conda-forge::google-cloud-storage
+  - conda-forge::haversine
+  - conda-forge::isort
+  - conda-forge::jinja2
+  - conda-forge::jupyter
+  - conda-forge::jupyter_nbextensions_configurator
+  - conda-forge::jupyterlab
+  - conda-forge::jupytext
+  - conda-forge::mamba
+  - conda-forge::matplotlib
+  - conda-forge::nbdime
+  - conda-forge::numcodecs
+  - conda-forge::numpy
+  - conda-forge::pandas-gbq
+  - conda-forge::plotly
+  - conda-forge::pre-commit
+  - conda-forge::proplot
+#  - conda-forge::seaborn
+#  - conda-forge::scikit-image
+#  - conda-forge::scikit-learn=0.23.2
+#  - conda-forge::scipy=1.5.3
+#  - conda-forge::tree
+  - conda-forge::zarr
+  - pip:
+    - git+https://github.com/GlobalFishingWatch/pyseas.git@v0.5.0#egg=pyseas
+    - imgkit==1.2.2
+    - jinja2-cli
+    - pyperclip
+
+
+

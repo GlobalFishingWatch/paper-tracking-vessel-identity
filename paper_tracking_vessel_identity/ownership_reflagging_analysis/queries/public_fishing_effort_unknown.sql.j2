@@ -1,0 +1,69 @@
+--------------------------------------------------------------------
+-- This query calculates gridded fishing effort for MMSI associated
+-- with vessels with unknown ownership. This includes vessels in the
+-- vessel database without ownership information AND all activity
+-- in the public fishing effort dataset for MMSI that are not in the
+-- vessel database as their ownership is also unknown.
+-- The query removes MMSI that used by multiple distinct vessels
+-- during overlapping activity time ranges because the activity
+-- associated with these MMSI is prone to error.
+--
+-- Last updated: 2021-08-19
+--------------------------------------------------------------------
+
+WITH 
+
+---------------------------------------------------------------------------------
+-- Get the fishing vessels that with known ownership (i.e. foreign owned,
+-- domestic owned, etc) to be able to remove them from total fishing activity.
+-- In addition, get any MMSI with identities with overlapping time ranges as
+-- we want to remove these from consideration.
+---------------------------------------------------------------------------------
+fishing_identities_to_remove AS (
+    SELECT 
+    mmsi,
+    first_timestamp,
+    last_timestamp,
+    FROM `{{ PROJECT }}.{{ OWNERSHIP_BY_MMSI_TABLE }}{{ VERSION }}`
+    WHERE is_fishing
+    AND (NOT is_unknown OR overlapping_identities_for_mmsi)
+    AND DATE(first_timestamp) <= '2020-12-31'
+),
+
+---------------------------------------------------------------------------------
+-- Get the fishing activity for each mmsi and their time ranges.
+-- The DISTINCT is crucial as it prevent duplication of fishing activity when 
+-- multiple identities are attached to one MMSI and have overlapping time ranges.
+---------------------------------------------------------------------------------
+fishing_joined AS (
+    SELECT DISTINCT
+    a.*, b.*
+    FROM `{{ PROJECT_PUBLIC }}.{{ PUBLIC_FISHING_EFFORT_TABLE }}` a
+    LEFT JOIN fishing_identities_to_remove b
+    ON a.mmsi = b.mmsi
+    AND a.date BETWEEN DATE(b.first_timestamp) AND DATE(b.last_timestamp)
+    WHERE a.fishing_hours IS NOT NULL
+),
+
+---------------------------------------------------------------------------------------
+-- Convert to one degree grid cells, excluding all cells that match a vessel with a known
+-- owner using `WHERE first_timestamp IS NULL`.
+---------------------------------------------------------------------------------------
+scaled_fishing_effort AS (
+    SELECT
+    * EXCEPT (cell_ll_lat, cell_ll_lon),
+    FLOOR(cell_ll_lat / {{ DEGREE }}) as cell_ll_lat,
+    FLOOR(cell_ll_lon / {{ DEGREE }}) as cell_ll_lon,
+    FROM fishing_joined
+    WHERE first_timestamp IS NULL
+)
+
+------------------------------------------------------------------------
+-- Group by one degree grid cells.
+------------------------------------------------------------------------
+SELECT
+cell_ll_lat as cell_ll_lat,
+cell_ll_lon as cell_ll_lon,
+SUM(fishing_hours) AS fishing_hours,
+FROM scaled_fishing_effort
+GROUP BY cell_ll_lat, cell_ll_lon
