@@ -1,3 +1,4 @@
+[![DOI](https://zenodo.org/badge/441320150.svg)](https://zenodo.org/badge/latestdoi/441320150)
 # GitHub Repository for the paper "Tracking Elusive and Shifting Identities of the Global Fishing fleet" (in review)
 
 This repo is to support the analyses provided in the paper (in review) entitled "Tracking Elusive and Shifting Identities of the Global Fishing Fleet."
