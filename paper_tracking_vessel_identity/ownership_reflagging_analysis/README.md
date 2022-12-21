@@ -11,7 +11,3 @@ This repo contains the necessary scripts and queries to generate the results (in
 
 *queries/*
 - The jinja2 queries used in the scripts. Please see each file for a description of what it does.
-
-  
----
-#### NOTE: Remove *archive/* folders before going public
