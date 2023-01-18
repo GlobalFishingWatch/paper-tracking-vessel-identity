@@ -1,22 +1,24 @@
 [![DOI](https://zenodo.org/badge/441320150.svg)](https://zenodo.org/badge/latestdoi/441320150)
-# GitHub Repository for the paper "Tracking Elusive and Shifting Identities of the Global Fishing fleet" (in review)
+# GitHub Repository for the paper "Tracking Elusive and Shifting Identities of the Global Fishing fleet" (published in _Science Advances_ on January 18, 2023)
 
-This repo is to support the analyses provided in the paper (in review) entitled "Tracking Elusive and Shifting Identities of the Global Fishing Fleet."
+This repo is to support the analyses provided in the paper entitled "Tracking Elusive and Shifting Identities of the Global Fishing Fleet." published on January 18, 2023 in _Science Advances_ 
+
+Paper citation: J. Park, J. Van Osdel, J. Turner, C. M. Farthing, N. A. Miller, H. L. Linder, G. Ortuño Crespo, G. Carmine, D. A. Kroodsma, Tracking elusive and shifting identities of the global fishing fleet. Sci. Adv. 9, eabp8200 (2023).
 
 ## Setup
 
-### Running scripts (TO BE UPDATED)
+### Running scripts
 
 1. Clone this repo by `git clone https://github.com/GlobalFishingWatch/paper-tracking-vessel-identity` 
 2. You have all analysis scripts organized by theme under the `paper_tracking_vessel_identity` folder.
 3. Follow the instructions in each folder.
 
-### Environments (TO BE UPDATED)
+### Environments
 
 1. For Python scripts
   * Requirement: python >= 3.8.0 (see packages in detail radenv_videntity.yaml)
   * run `pip install -e .` to install the necessary packages. This will create a folder titled `<module>.egg-info` that will allow you to access the code within `paper_tracking_vessel_identity` folder from outside of that folder by doing `import <module>` without any need to use paths.
-2. For R scripts, the tested R version is ... 
+2. For R scripts, the tested R version is 3.6.3 
 
 
 ## Structure and descriptions
