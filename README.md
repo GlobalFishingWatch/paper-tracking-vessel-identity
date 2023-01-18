@@ -1,9 +1,11 @@
 [![DOI](https://zenodo.org/badge/441320150.svg)](https://zenodo.org/badge/latestdoi/441320150)
 # GitHub Repository for the paper "Tracking Elusive and Shifting Identities of the Global Fishing fleet" (published in _Science Advances_ on January 18, 2023)
 
-This repo is to support the analyses provided in the paper entitled "Tracking Elusive and Shifting Identities of the Global Fishing Fleet." published on January 18, 2023 in _Science Advances_ 
+This repo is to support the analyses provided in the paper entitled ["Tracking Elusive and Shifting Identities of the Global Fishing Fleet"](science.org/doi/10.1126/sciadv.abp8200) published on January 18, 2023 in _Science Advances_ 
 
 Paper citation: J. Park, J. Van Osdel, J. Turner, C. M. Farthing, N. A. Miller, H. L. Linder, G. Ortuño Crespo, G. Carmine, D. A. Kroodsma, Tracking elusive and shifting identities of the global fishing fleet. Sci. Adv. 9, eabp8200 (2023).
+
+The core data used for this study are also available [here](https://globalfishingwatch.org/data-download/datasets/public-vessel-identity:v20230118) and the methodology is described in detail in the [Supplementary Materials](https://drive.google.com/file/d/1H-Fd0JfB5eDEKxn-h7sxH0Ci3eSIGg3F/view?usp=share_link) of the paper.  
 
 ## Setup
 
